@@ -35,29 +35,21 @@ function Invoke-NotifierDryRun {
         [string]$Event
     )
 
-    $startInfo = New-Object Diagnostics.ProcessStartInfo
-    $startInfo.FileName = (Join-Path $PSHOME "powershell.exe")
-    $startInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
-        $notifier + '" -DryRun -Event ' + $Event
-    $startInfo.UseShellExecute = $false
-    $startInfo.RedirectStandardInput = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $startInfo.CreateNoWindow = $true
-
-    $process = New-Object Diagnostics.Process
-    $process.StartInfo = $startInfo
-    $null = $process.Start()
-    $process.StandardInput.Write($Payload)
-    $process.StandardInput.Close()
-    $stdout = $process.StandardOutput.ReadToEnd()
-    $stderr = $process.StandardError.ReadToEnd()
-    $process.WaitForExit()
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = $Payload | & (Join-Path $PSHOME "powershell.exe") `
+            -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+            -File $notifier -DryRun -Event $Event 2>&1 | Out-String
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 
     return [pscustomobject]@{
-        ExitCode = $process.ExitCode
-        Stdout = $stdout
-        Stderr = $stderr
+        ExitCode = $exitCode
+        Stdout = $output
+        Stderr = $output
     }
 }
 
