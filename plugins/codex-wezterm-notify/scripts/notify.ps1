@@ -115,14 +115,12 @@ function New-NotificationData {
         throw "Expected a $expectedHookEvent hook payload, received '$actualHookEvent'."
     }
 
-    $sourcePaneId = [string]$env:WEZTERM_PANE
-    if ([string]::IsNullOrWhiteSpace($sourcePaneId)) {
-        throw "WEZTERM_PANE is missing. Run Codex inside native Windows WezTerm."
-    }
-
     $sessionId = Get-RequiredString $HookData "session_id"
     $workingDirectory = Normalize-DisplayPath (Get-RequiredString $HookData "cwd")
-    $weztermExecutable = Resolve-WezTermExecutable
+    $sourcePaneId = [string]$env:WEZTERM_PANE
+    $terminalIntegration = if ([string]::IsNullOrWhiteSpace($sourcePaneId)) { "none" } else { "wezterm" }
+    $weztermExecutable = if ($terminalIntegration -eq "wezterm") { Resolve-WezTermExecutable } else { "" }
+    $weztermSocket = if ($terminalIntegration -eq "wezterm") { [string]$env:WEZTERM_UNIX_SOCKET } else { "" }
 
     if ($NotificationEvent -eq "ApprovalRequested") {
         $toolName = Get-RequiredString $HookData "tool_name"
@@ -141,15 +139,16 @@ function New-NotificationData {
     }
 
     return [ordered]@{
-        event              = $NotificationEvent
-        title              = $title
-        message            = Limit-Text $message 1000
-        sound_path         = $soundPath
-        session_name       = Limit-Text $sessionId 120
-        working_directory  = Limit-Text $workingDirectory 500
-        source_pane_id     = $sourcePaneId
-        wezterm_executable = $weztermExecutable
-        wezterm_socket     = [string]$env:WEZTERM_UNIX_SOCKET
+        event                = $NotificationEvent
+        title                = $title
+        message              = Limit-Text $message 1000
+        sound_path           = $soundPath
+        session_name         = Limit-Text $sessionId 120
+        working_directory    = Limit-Text $workingDirectory 500
+        terminal_integration = $terminalIntegration
+        source_pane_id       = $sourcePaneId
+        wezterm_executable   = $weztermExecutable
+        wezterm_socket       = $weztermSocket
     }
 }
 
@@ -418,9 +417,10 @@ $message = [string]$notificationData.message
 $soundPath = [string]$notificationData.sound_path
 $sessionName = [string]$notificationData.session_name
 $workingDirectory = [string]$notificationData.working_directory
+$terminalIntegration = [string]$notificationData.terminal_integration
 $sourcePaneId = [string]$notificationData.source_pane_id
 $weztermCli = [string]$notificationData.wezterm_executable
-if ($notificationData.wezterm_socket) {
+if ($terminalIntegration -eq "wezterm" -and $notificationData.wezterm_socket) {
     $env:WEZTERM_UNIX_SOCKET = [string]$notificationData.wezterm_socket
 }
 
@@ -439,7 +439,7 @@ function Get-StableWindowTitle {
 }
 
 function Get-OriginatingWindowHandle {
-    if (-not $sourcePaneId -or -not $weztermCli) {
+    if ($terminalIntegration -ne "wezterm" -or -not $sourcePaneId -or -not $weztermCli) {
         return [IntPtr]::Zero
     }
 
@@ -525,7 +525,11 @@ $form.AutoScaleMode = [Windows.Forms.AutoScaleMode]::None
 $form.ClientSize = New-Object Drawing.Size(720, 140)
 $form.StartPosition = [Windows.Forms.FormStartPosition]::Manual
 
-$originatingWindow = Get-OriginatingWindowHandle
+$originatingWindow = if ($terminalIntegration -eq "wezterm") {
+    Get-OriginatingWindowHandle
+} else {
+    [IntPtr]::Zero
+}
 $screen = if ($originatingWindow -ne [IntPtr]::Zero) {
     [Windows.Forms.Screen]::FromHandle($originatingWindow).WorkingArea
 } else {
@@ -657,12 +661,13 @@ $activatePopup = {
     }
 }
 $dismissPopup = { $timer.Stop(); $form.Close() }
+$primaryClick = if ($terminalIntegration -eq "wezterm") { $activatePopup } else { $dismissPopup }
 $hoverOn = { $form.BackColor = [Drawing.Color]::FromArgb(30, 30, 46); $timer.Stop() }
 $hoverOff = { $form.BackColor = [Drawing.Color]::FromArgb(24, 24, 37); $timer.Start() }
 
 foreach ($control in @($form, $icon, $titleLabel, $sessionLabel, $workingDirectoryLabel, $messageLabel)) {
     $control.Cursor = [Windows.Forms.Cursors]::Hand
-    $control.Add_Click($activatePopup)
+    $control.Add_Click($primaryClick)
     $control.Add_MouseEnter($hoverOn)
     $control.Add_MouseLeave($hoverOff)
 }

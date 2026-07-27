@@ -1,7 +1,7 @@
 {
   "name": "codex-wezterm-notify",
-  "version": "0.1.0",
-  "description": "Native Windows notifications for Codex sessions running in WezTerm.",
+  "version": "0.2.0",
+  "description": "Native Windows notifications for Codex, with exact-pane return for WezTerm.",
   "author": {
     "name": "Tomas Bitvinskas",
     "url": "https://github.com/Tomauskasz"
@@ -18,8 +18,8 @@
   ],
   "interface": {
     "displayName": "Codex WezTerm Notify",
-    "shortDescription": "Clickable Codex notifications for Windows WezTerm",
-    "longDescription": "Shows completion and approval notifications with sound, response previews, and click-to-focus for the originating WezTerm pane.",
+    "shortDescription": "Windows Codex notifications; enhanced for WezTerm",
+    "longDescription": "Shows completion and approval notifications with sound and response previews in native Windows terminals. WezTerm also gets click-to-focus for the exact originating pane.",
     "developerName": "Tomas Bitvinskas",
     "category": "Productivity",
     "capabilities": [

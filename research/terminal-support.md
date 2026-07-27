@@ -4,19 +4,19 @@ Research date: 2026-07-27. Sources are terminal-owned documentation and source c
 
 ## Decision
 
-Ship this release as **`codex-wezterm-notify`**. The notification renderer is Windows-generic, but the product's distinguishing contract—click the notification and return to the exact originating terminal pane—is currently WezTerm-specific on Windows.
+Ship this release as **`codex-wezterm-notify`** with two explicit capability levels. Native Windows terminals receive the WinForms notification; WezTerm additionally gets originating-monitor placement and click-to-return to the exact pane.
 
-Do not advertise a silent "generic terminal" fallback. A popup that cannot return to its source is a materially weaker product. It could be offered later as an explicitly named notify-only mode, but it is not an equivalent adapter.
+Notify-only mode is supported behavior, not an exact-focus adapter. Its click action dismisses the popup, and the documentation must not imply that another terminal will be activated.
 
-The clean future shape is a shared Codex-event/popup core plus terminal adapters, but extracting or renaming now would be speculative: only one Windows adapter satisfies the full contract. Add a second adapter first, verify it end-to-end, then consider a broader name.
+Keep the implementation as one Windows popup path with a conditional WezTerm capability. A terminal-adapter abstraction or repository rename would still be speculative: only WezTerm satisfies the full exact-pane contract.
 
 ## Matrix
 
 | Terminal | Windows availability | Stable identity available to child | Supported exact activation | Terminal-native notification | Honest support now |
 |---|---|---|---|---|---|
 | **WezTerm** | Native Windows build | `WEZTERM_PANE`; mux socket can be preserved | `wezterm cli activate-pane --pane-id`; `list`/`list-clients` expose pane and GUI-client context | OSC 9 and OSC 777 toasts | **Yes: full exact-pane adapter** |
-| **Windows Terminal** | Native Windows | `WT_SESSION` is a unique GUID per ConPTY connection | No public API maps `WT_SESSION` to a window/tab/pane. `wt -w` targets a window and `focus-tab` uses a mutable tab index; pane focus is relative | OSC 777 exists on current `main`, opt-in, and its internal click handler selects the source tab/window; not present in latest stable v1.24 source | **No full adapter. Future terminal-native backend; generic popup would be notify-only/best-effort** |
-| **Alacritty** | Native Windows | No Alacritty window/session ID is injected on Windows; Unix has `ALACRITTY_WINDOW_ID` | Windows has no IPC; Unix IPC has create/config/get-config, not focus-existing-window | No OSC 9/99/777 notification support; BEL can run a configured command | **Notify-only popup at best; no supported exact focus** |
+| **Windows Terminal** | Native Windows | `WT_SESSION` is a unique GUID per ConPTY connection | No public API maps `WT_SESSION` to a window/tab/pane. `wt -w` targets a window and `focus-tab` uses a mutable tab index; pane focus is relative | OSC 777 exists on current `main`, opt-in, and its internal click handler selects the source tab/window; not present in latest stable v1.24 source | **Yes: generic popup; no supported exact focus** |
+| **Alacritty** | Native Windows | No Alacritty window/session ID is injected on Windows; Unix has `ALACRITTY_WINDOW_ID` | Windows has no IPC; Unix IPC has create/config/get-config, not focus-existing-window | No OSC 9/99/777 notification support; BEL can run a configured command | **Yes: generic popup; no supported exact focus** |
 | **kitty** | No native Windows build (official binaries: Linux/macOS) | `KITTY_WINDOW_ID`; optional `KITTY_LISTEN_ON` | Remote-control `focus-window`/`focus-tab`, subject to explicit remote-control authorization | Rich OSC 99: title/body, sound, buttons, and default click-to-focus | **Strong future macOS/Linux adapter, outside this Windows plugin** |
 | **Ghostty** | macOS/Linux; Windows explicitly future work | No Windows case | macOS has AppleScript automation; no cross-platform public exact-origin click adapter | Desktop notifications via OSC 9; release notes also identify OSC 777 as the recommended notification sequence | **No Windows adapter** |
 | **tmux** | POSIX multiplexer; on Windows normally inside WSL/MSYS and an outer terminal | Stable `%pane` ID and `TMUX_PANE` | `select-pane -t` / `select-window -t` activate the logical tmux target only | No desktop notification service; can pass escape sequences to the outer terminal when configured | **Composable inner adapter only; it cannot focus the host OS window by itself** |
@@ -34,7 +34,7 @@ WezTerm's CLI chooses the current pane from `WEZTERM_PANE`, and `activate-pane` 
 - [Windows installation](https://wezterm.org/installation/windows.html)
 - [OSC 9 and OSC 777 notification handling](https://wezterm.org/config/lua/config/notification_handling.html)
 
-This combination—not merely the ability to draw a notification—is why the current implementation can honestly promise the exact originating pane.
+This combination—not merely the ability to draw a notification—is why exact-pane return is available only in WezTerm.
 
 ### Windows Terminal
 
@@ -50,7 +50,7 @@ Current `main` has an opt-in `compatibility.allowOSC777` implementation. Its int
 - [Merged OSC 777 implementation PR](https://github.com/microsoft/terminal/pull/20012)
 - [Latest stable v1.24 settings source, which has no `AllowOSC777`](https://github.com/microsoft/terminal/blob/v1.24.11911.0/src/cascadia/TerminalSettingsModel/MTSMSettings.h)
 
-Therefore there are two future options, neither ready for the current promise:
+Therefore there are two future options for adding exact-return behavior beyond the current generic popup:
 
 1. A terminal-native OSC 777 backend after the feature reaches stable and terminal attachment from a Codex hook is verified. Its presentation, sound, and click behavior belong to Windows Terminal, so it is a different backend from the custom popup.
 2. A custom-popup adapter only if Windows Terminal exposes a supported exact-session activation API. Win32 title/PID heuristics are not a sufficient contract.
@@ -107,8 +107,8 @@ WezTerm documents OSC 9 and 777; kitty owns the OSC 99 design; Ghostty documents
 
 ## Recommendation
 
-1. Publish **`codex-wezterm-notify`** with its current full promise.
-2. Keep internal seams narrow: event normalization, Windows popup rendering, and `Focus-WezTermPane`. Do not publish a generic abstraction/package yet.
-3. Document WezTerm as a capability requirement, not an arbitrary brand restriction.
+1. Publish **`codex-wezterm-notify`** with generic native Windows notifications and an explicit WezTerm enhancement.
+2. Keep internal seams narrow: event normalization, Windows popup rendering, and `Focus-WezTermPane`. Do not publish a terminal-adapter abstraction yet.
+3. Document WezTerm as the requirement for exact-pane return, not for notifications themselves.
 4. Track Windows Terminal OSC 777 as an experimental future backend once it ships stable and hook-to-TTY emission is proven.
 5. If expanding beyond Windows, implement kitty second. Only then consider renaming to a terminal-neutral project and preserving this repository/name as an install alias or redirect.

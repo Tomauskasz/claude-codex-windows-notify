@@ -68,6 +68,7 @@ try {
     $stop = $stopResult.Stdout | ConvertFrom-Json
     Assert-Equal $stop.event "TurnComplete" "Stop event should map to completion."
     Assert-Equal $stop.message "All checks passed." "Supported last_assistant_message should drive the preview."
+    Assert-Equal $stop.terminal_integration "wezterm" "WezTerm sessions should enable exact-pane integration."
     Assert-Equal $stop.source_pane_id "42" "Originating WezTerm pane should be captured."
 
     $permissionPayload = Get-Content -Raw -LiteralPath (Join-Path $fixtureDirectory "permission-request.json")
@@ -75,6 +76,25 @@ try {
     Assert-ProcessSucceeded $permissionResult "PermissionRequest fixture should succeed."
     $permission = $permissionResult.Stdout | ConvertFrom-Json
     Assert-Equal $permission.message "Approval requested for exec_command." "Tool name should appear in approval notifications."
+
+    $env:WEZTERM_EXECUTABLE_DIR = $null
+    $env:WEZTERM_PANE = $null
+    $env:WEZTERM_UNIX_SOCKET = $null
+    $genericResult = Invoke-NotifierDryRun $stopPayload "TurnComplete"
+    Assert-ProcessSucceeded $genericResult "Stop fixture should succeed outside WezTerm."
+    $generic = $genericResult.Stdout | ConvertFrom-Json
+    Assert-Equal $generic.event "TurnComplete" "Generic terminal stop event should map to completion."
+    Assert-Equal $generic.message "All checks passed." "Generic terminal preview should preserve the Codex message."
+    Assert-Equal $generic.session_name "018f-test-session" "Generic terminal notification should preserve the session ID."
+    Assert-Equal $generic.working_directory "C:\work\demo" "Generic terminal notification should preserve the working directory."
+    Assert-Equal $generic.terminal_integration "none" "Non-WezTerm sessions should not enable terminal focus integration."
+    Assert-Equal $generic.source_pane_id "" "Non-WezTerm sessions should not claim a source pane."
+    Assert-Equal $generic.wezterm_executable "" "Non-WezTerm sessions should not resolve WezTerm."
+    Assert-Equal $generic.wezterm_socket "" "Non-WezTerm sessions should not capture a WezTerm socket."
+
+    $env:WEZTERM_EXECUTABLE_DIR = $temporaryDirectory
+    $env:WEZTERM_PANE = "42"
+    $env:WEZTERM_UNIX_SOCKET = "test-socket"
 
     $unicodeMessage = (1..1005 | ForEach-Object { [char]::ConvertFromUtf32(0x1F680) }) -join ""
     $longPayload = [ordered]@{
