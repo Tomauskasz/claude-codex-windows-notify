@@ -21,6 +21,13 @@ function Assert-True {
     }
 }
 
+function Assert-ProcessSucceeded {
+    param($Result, [string]$Message)
+    if ($Result.ExitCode -ne 0) {
+        throw "$Message`nSTDOUT:`n$($Result.Stdout)`nSTDERR:`n$($Result.Stderr)"
+    }
+}
+
 function Invoke-NotifierDryRun {
     param(
         [string]$Payload,
@@ -65,7 +72,7 @@ try {
 
     $stopPayload = Get-Content -Raw -LiteralPath (Join-Path $fixtureDirectory "stop.json")
     $stopResult = Invoke-NotifierDryRun $stopPayload "TurnComplete"
-    Assert-Equal $stopResult.ExitCode 0 "Stop fixture should succeed."
+    Assert-ProcessSucceeded $stopResult "Stop fixture should succeed."
     $stop = $stopResult.Stdout | ConvertFrom-Json
     Assert-Equal $stop.event "TurnComplete" "Stop event should map to completion."
     Assert-Equal $stop.message "All checks passed." "Supported last_assistant_message should drive the preview."
@@ -73,7 +80,7 @@ try {
 
     $permissionPayload = Get-Content -Raw -LiteralPath (Join-Path $fixtureDirectory "permission-request.json")
     $permissionResult = Invoke-NotifierDryRun $permissionPayload "ApprovalRequested"
-    Assert-Equal $permissionResult.ExitCode 0 "PermissionRequest fixture should succeed."
+    Assert-ProcessSucceeded $permissionResult "PermissionRequest fixture should succeed."
     $permission = $permissionResult.Stdout | ConvertFrom-Json
     Assert-Equal $permission.message "Approval requested for exec_command." "Tool name should appear in approval notifications."
 
@@ -85,7 +92,7 @@ try {
         session_id = "unicode-test"
     } | ConvertTo-Json -Compress
     $longResult = Invoke-NotifierDryRun $longPayload "TurnComplete"
-    Assert-Equal $longResult.ExitCode 0 "Long Unicode response should succeed."
+    Assert-ProcessSucceeded $longResult "Long Unicode response should succeed."
     $long = $longResult.Stdout | ConvertFrom-Json
     Assert-Equal $long.working_directory "\\server\share\repo" "Extended UNC path should be normalized correctly."
     Assert-Equal ([Globalization.StringInfo]::ParseCombiningCharacters($long.message).Count) 1000 "Preview should be capped by text elements."
