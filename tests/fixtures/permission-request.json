@@ -1,0 +1,15 @@
+{
+  "agent_id": "agent-test",
+  "agent_type": "default",
+  "cwd": "C:\\work\\demo",
+  "hook_event_name": "PermissionRequest",
+  "model": "gpt-test",
+  "permission_mode": "default",
+  "session_id": "018f-test-session",
+  "tool_input": {
+    "cmd": "example"
+  },
+  "tool_name": "exec_command",
+  "transcript_path": null,
+  "turn_id": "turn-test"
+}

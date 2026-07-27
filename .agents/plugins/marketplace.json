@@ -1,0 +1,20 @@
+{
+  "name": "codex-wezterm-notify",
+  "interface": {
+    "displayName": "Codex WezTerm Notify"
+  },
+  "plugins": [
+    {
+      "name": "codex-wezterm-notify",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex-wezterm-notify"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

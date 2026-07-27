@@ -1,0 +1,23 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test notifier
+        shell: powershell
+        run: .\tests\run-tests.ps1
+      - name: Validate JSON
+        shell: powershell
+        run: |
+          Get-Content .\plugins\codex-wezterm-notify\.codex-plugin\plugin.json -Raw | ConvertFrom-Json | Out-Null
+          Get-Content .\plugins\codex-wezterm-notify\hooks\hooks.json -Raw | ConvertFrom-Json | Out-Null
+          Get-Content .\.agents\plugins\marketplace.json -Raw | ConvertFrom-Json | Out-Null

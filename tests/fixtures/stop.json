@@ -1,0 +1,11 @@
+{
+  "cwd": "C:\\work\\demo",
+  "hook_event_name": "Stop",
+  "last_assistant_message": "All checks passed.",
+  "model": "gpt-test",
+  "permission_mode": "default",
+  "session_id": "018f-test-session",
+  "stop_hook_active": false,
+  "transcript_path": null,
+  "turn_id": "turn-test"
+}

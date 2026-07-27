@@ -1,0 +1,34 @@
+{
+  "name": "codex-wezterm-notify",
+  "version": "0.1.0",
+  "description": "Native Windows notifications for Codex sessions running in WezTerm.",
+  "author": {
+    "name": "Tomas Bitvinskas",
+    "url": "https://github.com/Tomauskasz"
+  },
+  "homepage": "https://github.com/Tomauskasz/codex-wezterm-notify",
+  "repository": "https://github.com/Tomauskasz/codex-wezterm-notify",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "hooks",
+    "notifications",
+    "wezterm",
+    "windows"
+  ],
+  "interface": {
+    "displayName": "Codex WezTerm Notify",
+    "shortDescription": "Clickable Codex notifications for Windows WezTerm",
+    "longDescription": "Shows completion and approval notifications with sound, response previews, and click-to-focus for the originating WezTerm pane.",
+    "developerName": "Tomas Bitvinskas",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive"
+    ],
+    "websiteURL": "https://github.com/Tomauskasz/codex-wezterm-notify",
+    "brandColor": "#A6E3A1",
+    "defaultPrompt": [
+      "Explain how my Codex WezTerm notifications work"
+    ]
+  }
+}
