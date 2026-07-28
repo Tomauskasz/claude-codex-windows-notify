@@ -31,25 +31,36 @@ function Assert-ProcessSucceeded {
 function Invoke-NotifierDryRun {
     param(
         [string]$Payload,
-        [ValidateSet("TurnComplete", "ApprovalRequested")]
-        [string]$Event
+        [ValidateSet("TurnComplete", "ApprovalRequested", "AttentionRequested", "BackgroundComplete", "TurnFailed")]
+        [string]$Event,
+        [ValidateSet("Codex", "Claude")]
+        [string]$ProductName = "Codex"
     )
 
-    $previousErrorActionPreference = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        $output = $Payload | & (Join-Path $PSHOME "powershell.exe") `
-            -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-            -File $notifier -DryRun -Event $Event 2>&1 | Out-String
-        $exitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-    }
+    $startInfo = New-Object Diagnostics.ProcessStartInfo
+    $startInfo.FileName = Join-Path $PSHOME "powershell.exe"
+    $startInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+        $notifier + '" -DryRun -Event ' + $Event + ' -ProductName ' + $ProductName
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $startInfo
+    $null = $process.Start()
+    $payloadBytes = (New-Object Text.UTF8Encoding($false)).GetBytes($Payload)
+    $process.StandardInput.BaseStream.Write($payloadBytes, 0, $payloadBytes.Length)
+    $process.StandardInput.BaseStream.Flush()
+    $process.StandardInput.BaseStream.Close()
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
 
     return [pscustomobject]@{
-        ExitCode = $exitCode
-        Stdout = $output
-        Stderr = $output
+        ExitCode = $process.ExitCode
+        Stdout = $stdout
+        Stderr = $stderr
     }
 }
 
@@ -76,6 +87,66 @@ try {
     Assert-ProcessSucceeded $permissionResult "PermissionRequest fixture should succeed."
     $permission = $permissionResult.Stdout | ConvertFrom-Json
     Assert-Equal $permission.message "Approval requested for exec_command." "Tool name should appear in approval notifications."
+
+    $questionPayload = [ordered]@{
+        cwd = "C:\work\demo"
+        hook_event_name = "PermissionRequest"
+        session_id = "claude-test-session"
+        tool_name = "AskUserQuestion"
+        tool_input = @{
+            questions = @(@{ question = "Which approach should I use?" })
+        }
+    } | ConvertTo-Json -Compress -Depth 5
+    $questionResult = Invoke-NotifierDryRun $questionPayload "ApprovalRequested" "Claude"
+    Assert-ProcessSucceeded $questionResult "Claude question fixture should succeed."
+    $question = $questionResult.Stdout | ConvertFrom-Json
+    Assert-Equal $question.title "Claude has a question" "Questions should be distinguished from approvals."
+    Assert-Equal $question.message "Which approach should I use?" "Question notifications should preview the first question."
+
+    $unicodePreview = "Shift+Enter $([char]0x2192) newline $([char]0x2014) caf$([char]0x00E9) " +
+        (-join @([char]0x65E5, [char]0x672C, [char]0x8A9E)) + " " +
+        [char]::ConvertFromUtf32(0x1F680)
+    $unicodePayload = [ordered]@{
+        cwd = "C:\work\demo"
+        hook_event_name = "Stop"
+        last_assistant_message = $unicodePreview
+        session_id = "unicode-preview-test"
+    } | ConvertTo-Json -Compress
+    $unicodeResult = Invoke-NotifierDryRun $unicodePayload "TurnComplete"
+    Assert-ProcessSucceeded $unicodeResult "Raw UTF-8 hook payload should parse successfully."
+    $unicode = $unicodeResult.Stdout | ConvertFrom-Json
+    Assert-Equal $unicode.message $unicodePreview "Notification preview should preserve every Unicode code point."
+
+    $claudeStopResult = Invoke-NotifierDryRun $stopPayload "TurnComplete" "Claude"
+    Assert-ProcessSucceeded $claudeStopResult "Claude Stop fixture should succeed."
+    $claudeStop = $claudeStopResult.Stdout | ConvertFrom-Json
+    Assert-Equal $claudeStop.title "Claude finished" "Product name should drive the completion title."
+
+    $notificationPayload = [ordered]@{
+        cwd = "C:\work\demo"
+        hook_event_name = "Notification"
+        message = "Claude is waiting for your answer."
+        notification_type = "agent_needs_input"
+        session_id = "claude-test-session"
+    } | ConvertTo-Json -Compress
+    $attentionResult = Invoke-NotifierDryRun $notificationPayload "AttentionRequested" "Claude"
+    Assert-ProcessSucceeded $attentionResult "Claude Notification fixture should succeed."
+    $attention = $attentionResult.Stdout | ConvertFrom-Json
+    Assert-Equal $attention.title "Claude needs you" "Attention notifications should use the Claude title."
+    Assert-Equal $attention.message "Claude is waiting for your answer." "Attention notifications should preserve Claude's message."
+
+    $failurePayload = [ordered]@{
+        cwd = "C:\work\demo"
+        error = "rate_limit"
+        hook_event_name = "StopFailure"
+        last_assistant_message = "API Error: Rate limit reached"
+        session_id = "claude-test-session"
+    } | ConvertTo-Json -Compress
+    $failureResult = Invoke-NotifierDryRun $failurePayload "TurnFailed" "Claude"
+    Assert-ProcessSucceeded $failureResult "Claude StopFailure fixture should succeed."
+    $failure = $failureResult.Stdout | ConvertFrom-Json
+    Assert-Equal $failure.title "Claude failed" "Failure notifications should identify Claude."
+    Assert-Equal $failure.message "API Error: Rate limit reached" "Failure notifications should preserve the rendered error."
 
     $env:WEZTERM_EXECUTABLE_DIR = $null
     $env:WEZTERM_PANE = $null

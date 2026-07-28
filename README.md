@@ -4,10 +4,13 @@ Native Windows notifications for Codex, with exact-pane return for WezTerm.
 
 When Codex finishes a turn or needs approval, the plugin shows a compact popup with sound, session and working-directory context, and a response preview. It works from native Windows terminal emulators; in WezTerm, clicking the popup returns to the exact pane that produced it.
 
+The same renderer can also be wired to Claude Code's lifecycle hooks. See [Use with Claude Code](docs/claude-code.md).
+
 ## Features
 
 - Completion and approval-request notifications from Codex lifecycle hooks
 - Final-response preview using Codex's supported `last_assistant_message` field
+- UTF-8 previews for punctuation, non-Latin scripts, and emoji
 - Distinct sound and color for completion versus approval
 - Popup on the current monitor, or the originating WezTerm window's monitor
 - WezTerm-only click-to-activate for the originating pane and Windows window
@@ -60,7 +63,7 @@ codex plugin marketplace remove codex-wezterm-notify
 
 ## How it works
 
-The hook synchronously validates Codex's JSON payload and detects whether `WEZTERM_PANE` is available. For a WezTerm session it also captures the WezTerm executable and mux socket. It then starts a detached PowerShell worker with a bounded notification payload so the Codex hook returns immediately.
+The hook decodes stdin as UTF-8, accepts an optional UTF-8 BOM, synchronously validates the JSON payload, and detects whether `WEZTERM_PANE` is available. For a WezTerm session it also captures the WezTerm executable and mux socket. It then starts a detached PowerShell worker with a bounded notification payload so the lifecycle hook returns immediately.
 
 The worker renders a WinForms popup. In WezTerm, clicking it uses the JSON CLI to activate the pane, resolves the owning GUI process, and focuses the matching native window. Ambiguous window matches fail closed and produce `%TEMP%\codex-wezterm-notify.log` plus an error dialog. In other terminals, clicking the popup only dismisses it.
 
@@ -94,7 +97,7 @@ python "$env:USERPROFILE\.codex\skills\.system\plugin-creator\scripts\validate_p
   ".\plugins\codex-wezterm-notify"
 ```
 
-The tests cover WezTerm and generic-terminal payloads, both hook events, the documented completion-message field, invalid input, hook mismatches, Unicode-safe response limits, extended UNC paths, plugin-root command resolution, and forbidden internal Codex dependencies.
+The tests cover WezTerm and generic-terminal payloads, Codex and Claude event contracts, raw UTF-8 input and exact Unicode preservation, the documented completion-message field, invalid input, hook mismatches, Unicode-safe response limits, extended UNC paths, plugin-root command resolution, and forbidden internal Codex dependencies.
 
 ## License
 

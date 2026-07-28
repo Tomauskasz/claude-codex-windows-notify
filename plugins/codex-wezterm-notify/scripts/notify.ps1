@@ -1,6 +1,9 @@
 param(
-    [ValidateSet("TurnComplete", "ApprovalRequested")]
+    [ValidateSet("TurnComplete", "ApprovalRequested", "AttentionRequested", "BackgroundComplete", "TurnFailed")]
     [string]$Event = "TurnComplete",
+
+    [ValidateSet("Codex", "Claude")]
+    [string]$ProductName = "Codex",
 
     [switch]$Worker,
 
@@ -10,7 +13,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+$utf8WithoutBom = New-Object Text.UTF8Encoding($false)
+[Console]::InputEncoding = $utf8WithoutBom
+[Console]::OutputEncoding = $utf8WithoutBom
 $OutputEncoding = [Console]::OutputEncoding
 
 function Write-WorkerFailure {
@@ -109,7 +114,12 @@ function New-NotificationData {
         [string]$NotificationEvent
     )
 
-    $expectedHookEvent = if ($NotificationEvent -eq "ApprovalRequested") { "PermissionRequest" } else { "Stop" }
+    $expectedHookEvent = switch ($NotificationEvent) {
+        "ApprovalRequested" { "PermissionRequest" }
+        { $_ -in "AttentionRequested", "BackgroundComplete" } { "Notification" }
+        "TurnFailed" { "StopFailure" }
+        default { "Stop" }
+    }
     $actualHookEvent = Get-RequiredString $HookData "hook_event_name"
     if ($actualHookEvent -ne $expectedHookEvent) {
         throw "Expected a $expectedHookEvent hook payload, received '$actualHookEvent'."
@@ -122,20 +132,55 @@ function New-NotificationData {
     $weztermExecutable = if ($terminalIntegration -eq "wezterm") { Resolve-WezTermExecutable } else { "" }
     $weztermSocket = if ($terminalIntegration -eq "wezterm") { [string]$env:WEZTERM_UNIX_SOCKET } else { "" }
 
-    if ($NotificationEvent -eq "ApprovalRequested") {
-        $toolName = Get-RequiredString $HookData "tool_name"
-        $title = "Codex needs you"
-        $message = "Approval requested for $toolName."
-        $soundPath = "C:\Windows\Media\Windows Message Nudge.wav"
-    } else {
-        $title = "Codex finished"
-        $message = [string]$HookData.last_assistant_message
-        if ([string]::IsNullOrWhiteSpace($message)) {
-            $message = "Codex finished without a final response."
-        } else {
-            $message = $message.Trim()
+    switch ($NotificationEvent) {
+        "ApprovalRequested" {
+            $toolName = Get-RequiredString $HookData "tool_name"
+            if ($toolName -eq "AskUserQuestion") {
+                $title = "$ProductName has a question"
+                $questions = @($HookData.tool_input.questions)
+                $message = if ($questions.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$questions[0].question)) {
+                    [string]$questions[0].question
+                } else {
+                    "$ProductName is waiting for your answer."
+                }
+            } else {
+                $title = "$ProductName needs you"
+                $message = "Approval requested for $toolName."
+            }
+            $soundPath = "C:\Windows\Media\Windows Message Nudge.wav"
         }
-        $soundPath = "C:\Windows\Media\Windows Notify Calendar.wav"
+        "AttentionRequested" {
+            $title = [string]$HookData.title
+            if ([string]::IsNullOrWhiteSpace($title)) { $title = "$ProductName needs you" }
+            $message = Get-RequiredString $HookData "message"
+            $soundPath = "C:\Windows\Media\Windows Message Nudge.wav"
+        }
+        "BackgroundComplete" {
+            $title = [string]$HookData.title
+            if ([string]::IsNullOrWhiteSpace($title)) { $title = "$ProductName background work finished" }
+            $message = Get-RequiredString $HookData "message"
+            $soundPath = "C:\Windows\Media\Windows Notify Calendar.wav"
+        }
+        "TurnFailed" {
+            $title = "$ProductName failed"
+            $message = [string]$HookData.last_assistant_message
+            if ([string]::IsNullOrWhiteSpace($message)) {
+                $errorType = Get-RequiredString $HookData "error"
+                $message = "$ProductName stopped because of $errorType."
+            }
+            $soundPath = "C:\Windows\Media\Windows Exclamation.wav"
+        }
+        default {
+            $title = "$ProductName finished"
+            $message = [string]$HookData.last_assistant_message
+            if ([string]::IsNullOrWhiteSpace($message)) {
+                $message = "$ProductName finished without a final response."
+            }
+            $soundPath = "C:\Windows\Media\Windows Notify Calendar.wav"
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($message)) {
+        $message = $message.Trim()
     }
 
     return [ordered]@{
@@ -164,6 +209,7 @@ if ($Worker) {
     if ([string]::IsNullOrWhiteSpace($payload)) {
         throw "Codex hook payload was empty."
     }
+    $payload = $payload.TrimStart([char]0xFEFF)
 
     try {
         $hookData = $payload | ConvertFrom-Json
@@ -542,10 +588,10 @@ $form.Location = New-Object Drawing.Point(
     ($screen.Bottom - $form.Height - 18)
 )
 
-$accentColor = if ($Event -eq "ApprovalRequested") {
-    [Drawing.Color]::FromArgb(249, 226, 175)
-} else {
-    [Drawing.Color]::FromArgb(166, 227, 161)
+$accentColor = switch ($Event) {
+    { $_ -in "ApprovalRequested", "AttentionRequested" } { [Drawing.Color]::FromArgb(249, 226, 175) }
+    "TurnFailed" { [Drawing.Color]::FromArgb(243, 139, 168) }
+    default { [Drawing.Color]::FromArgb(166, 227, 161) }
 }
 
 $icon = New-Object Windows.Forms.Label
@@ -556,7 +602,11 @@ $icon.BackColor = $accentColor
 $icon.ForeColor = [Drawing.Color]::FromArgb(24, 24, 37)
 $icon.Font = New-Object Drawing.Font("Segoe UI Symbol", 18, [Drawing.FontStyle]::Bold)
 $icon.TextAlign = [Drawing.ContentAlignment]::MiddleCenter
-$icon.Text = if ($Event -eq "ApprovalRequested") { "!" } else { [char]0x2713 }
+$icon.Text = switch ($Event) {
+    { $_ -in "ApprovalRequested", "AttentionRequested" } { "!" }
+    "TurnFailed" { [char]0x00D7 }
+    default { [char]0x2713 }
+}
 $form.Controls.Add($icon)
 
 $titleLabel = New-Object Windows.Forms.Label
