@@ -349,6 +349,9 @@ public static class CodexWindowFocus
     public static extern bool SetProcessDpiAwarenessContext(IntPtr context);
 
     [DllImport("user32.dll")]
+    public static extern bool ShowWindowAsync(IntPtr window, int command);
+
+    [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr window);
 
     [DllImport("user32.dll")]

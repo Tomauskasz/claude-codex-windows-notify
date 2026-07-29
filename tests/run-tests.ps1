@@ -203,6 +203,9 @@ try {
     $geometryChangingActivation = Select-String -LiteralPath $notifier -Pattern "ShowWindowAsync\(window,\s*9\)|SwitchToThisWindow\(window"
     Assert-Equal @($geometryChangingActivation).Count 0 "Notification clicks must focus WezTerm without restoring, resizing, or unsnapping its window."
 
+    $showWithoutActivationDeclaration = Select-String -LiteralPath $notifier -Pattern "public static extern bool ShowWindowAsync\(IntPtr window, int command\);"
+    Assert-Equal @($showWithoutActivationDeclaration).Count 1 "The popup must retain the ShowWindowAsync declaration used to display without stealing focus."
+
     Write-Output "All tests passed."
 } finally {
     Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction SilentlyContinue
