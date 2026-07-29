@@ -349,9 +349,6 @@ public static class CodexWindowFocus
     public static extern bool SetProcessDpiAwarenessContext(IntPtr context);
 
     [DllImport("user32.dll")]
-    public static extern bool ShowWindowAsync(IntPtr window, int command);
-
-    [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr window);
 
     [DllImport("user32.dll")]
@@ -371,9 +368,6 @@ public static class CodexWindowFocus
 
     [DllImport("user32.dll")]
     private static extern bool AttachThreadInput(uint firstThread, uint secondThread, bool attach);
-
-    [DllImport("user32.dll")]
-    private static extern void SwitchToThisWindow(IntPtr window, bool altTab);
 
     private delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
 
@@ -416,7 +410,6 @@ public static class CodexWindowFocus
             return false;
         }
 
-        ShowWindowAsync(window, 9);
         IntPtr foregroundWindow = GetForegroundWindow();
         uint ignoredProcessId;
         uint foregroundThread = GetWindowThreadProcessId(foregroundWindow, out ignoredProcessId);
@@ -432,10 +425,6 @@ public static class CodexWindowFocus
             BringWindowToTop(window);
             SetForegroundWindow(window);
             SetFocus(window);
-            if (GetForegroundWindow() != window)
-            {
-                SwitchToThisWindow(window, true);
-            }
             return GetForegroundWindow() == window;
         }
         finally

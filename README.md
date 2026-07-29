@@ -65,7 +65,7 @@ codex plugin marketplace remove codex-wezterm-notify
 
 The hook decodes stdin as UTF-8, accepts an optional UTF-8 BOM, synchronously validates the JSON payload, and detects whether `WEZTERM_PANE` is available. For a WezTerm session it also captures the WezTerm executable and mux socket. It then starts a detached PowerShell worker with a bounded notification payload so the lifecycle hook returns immediately.
 
-The worker renders a WinForms popup. In WezTerm, clicking it uses the JSON CLI to activate the pane, resolves the owning GUI process, and focuses the matching native window. Ambiguous window matches fail closed and produce `%TEMP%\codex-wezterm-notify.log` plus an error dialog. In other terminals, clicking the popup only dismisses it.
+The worker renders a WinForms popup. In WezTerm, clicking it uses the JSON CLI to activate the pane, resolves the owning GUI process, and focuses the matching native window without restoring, resizing, moving, or unsnapping it. Ambiguous window matches fail closed and produce `%TEMP%\codex-wezterm-notify.log` plus an error dialog. In other terminals, clicking the popup only dismisses it.
 
 The implementation deliberately does not read Codex's internal SQLite database or transcript format.
 

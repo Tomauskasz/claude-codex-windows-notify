@@ -200,6 +200,9 @@ try {
     $forbiddenInternals = Select-String -LiteralPath $notifier -Pattern "state_5\.sqlite|session_index\.jsonl|transcript_path|internal_chat_message_metadata_passthrough|last-assistant-message"
     Assert-Equal @($forbiddenInternals).Count 0 "Notifier should not depend on internal Codex persistence formats."
 
+    $geometryChangingActivation = Select-String -LiteralPath $notifier -Pattern "ShowWindowAsync\(window,\s*9\)|SwitchToThisWindow\(window"
+    Assert-Equal @($geometryChangingActivation).Count 0 "Notification clicks must focus WezTerm without restoring, resizing, or unsnapping its window."
+
     Write-Output "All tests passed."
 } finally {
     Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction SilentlyContinue
