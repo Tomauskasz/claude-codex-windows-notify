@@ -25,7 +25,7 @@ $script:productLabel = if ($Worker) { "" } else { $ProductName }
 function Write-WorkerFailure {
     param([string]$Message)
 
-    $logPath = Join-Path $env:TEMP "codex-wezterm-notify.log"
+    $logPath = Join-Path $env:TEMP "claude-codex-windows-notify.log"
     $diagnostic = "[$([DateTime]::UtcNow.ToString('o'))] $Message"
     try {
         Add-Content -LiteralPath $logPath -Value $diagnostic -Encoding UTF8

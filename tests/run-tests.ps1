@@ -2,10 +2,10 @@ param()
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$notifier = Join-Path $root "plugins\codex-wezterm-notify\scripts\notify.ps1"
-$hooksPath = Join-Path $root "plugins\codex-wezterm-notify\hooks\hooks.json"
+$notifier = Join-Path $root "plugins\claude-codex-windows-notify\scripts\notify.ps1"
+$hooksPath = Join-Path $root "plugins\claude-codex-windows-notify\hooks\hooks.json"
 $fixtureDirectory = Join-Path $PSScriptRoot "fixtures"
-$temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) ("codex-wezterm-notify-tests-" + [guid]::NewGuid())
+$temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) ("claude-codex-windows-notify-tests-" + [guid]::NewGuid())
 
 function Assert-Equal {
     param($Actual, $Expected, [string]$Message)
@@ -63,6 +63,10 @@ function Invoke-NotifierDryRun {
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    # Redirected streams otherwise decode using the calling console's encoding, so running this
+    # suite from a non-UTF-8 shell would mangle the notifier's output and fail the Unicode checks.
+    $startInfo.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
+    $startInfo.StandardErrorEncoding = New-Object Text.UTF8Encoding($false)
 
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $startInfo
@@ -276,8 +280,8 @@ try {
     . ([scriptblock]::Create((Get-NotifierFunctionSource "Get-WorkingDirectoryTitleSegments")))
     $repositorySegments = @(Get-WorkingDirectoryTitleSegments "D:\Documents\beamng_driving_agent\src\agents")
     Assert-Equal ($repositorySegments -join ",") "agents,src,beamng_driving_agent,Documents" "Title segments should run from the deepest folder outwards."
-    $profileSegments = @(Get-WorkingDirectoryTitleSegments (Join-Path $env:USERPROFILE "codex-wezterm-notify"))
-    Assert-Equal ($profileSegments -join ",") "codex-wezterm-notify" "Title segments should stop at the user profile instead of matching on 'Users'."
+    $profileSegments = @(Get-WorkingDirectoryTitleSegments (Join-Path $env:USERPROFILE "claude-codex-windows-notify"))
+    Assert-Equal ($profileSegments -join ",") "claude-codex-windows-notify" "Title segments should stop at the user profile instead of matching on 'Users'."
     Assert-Equal @(Get-WorkingDirectoryTitleSegments $env:USERPROFILE).Count 0 "The profile directory itself yields no distinguishing segment."
     Assert-Equal @(Get-WorkingDirectoryTitleSegments "D:\").Count 0 "A drive root yields no distinguishing segment."
     Assert-Equal @(Get-WorkingDirectoryTitleSegments "").Count 0 "A missing working directory yields no segments."

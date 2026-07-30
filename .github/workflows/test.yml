@@ -18,6 +18,6 @@ jobs:
       - name: Validate JSON
         shell: powershell
         run: |
-          Get-Content .\plugins\codex-wezterm-notify\.codex-plugin\plugin.json -Raw | ConvertFrom-Json | Out-Null
-          Get-Content .\plugins\codex-wezterm-notify\hooks\hooks.json -Raw | ConvertFrom-Json | Out-Null
+          Get-Content .\plugins\claude-codex-windows-notify\.codex-plugin\plugin.json -Raw | ConvertFrom-Json | Out-Null
+          Get-Content .\plugins\claude-codex-windows-notify\hooks\hooks.json -Raw | ConvertFrom-Json | Out-Null
           Get-Content .\.agents\plugins\marketplace.json -Raw | ConvertFrom-Json | Out-Null

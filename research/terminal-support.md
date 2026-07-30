@@ -12,6 +12,8 @@ Notify-only mode is supported behavior, not an exact-focus adapter. Its click ac
 
 Keep the implementation as one Windows popup path with a conditional WezTerm capability. A terminal-adapter abstraction or repository rename would still be speculative: only WezTerm satisfies the full exact-pane contract.
 
+> **Renamed 2026-07-30.** The project shipped as `codex-wezterm-notify` and is now `claude-codex-windows-notify`. Both names below are historical. The rename followed recommendation 5 at the end of this document once WezTerm stopped being the only terminal that could be returned to: the popup is a Windows capability that serves Codex and Claude Code equally, and WezTerm is one capability level rather than the product's defining feature. The single-popup-path decision itself still holds; no terminal-adapter abstraction was introduced.
+
 ## Matrix
 
 | Terminal | Windows availability | Stable identity available to child | Supported exact activation | Terminal-native notification | Honest support now |

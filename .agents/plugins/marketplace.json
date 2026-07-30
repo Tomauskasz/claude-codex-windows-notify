@@ -1,14 +1,14 @@
 {
-  "name": "codex-wezterm-notify",
+  "name": "claude-codex-windows-notify",
   "interface": {
-    "displayName": "Codex WezTerm Notify"
+    "displayName": "Claude/Codex Windows Notify"
   },
   "plugins": [
     {
-      "name": "codex-wezterm-notify",
+      "name": "claude-codex-windows-notify",
       "source": {
         "source": "local",
-        "path": "./plugins/codex-wezterm-notify"
+        "path": "./plugins/claude-codex-windows-notify"
       },
       "policy": {
         "installation": "AVAILABLE",

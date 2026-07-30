@@ -12,7 +12,7 @@ Claude Code has no plugin hook mechanism, so its hooks live in your user setting
 
 ## Configure
 
-Open `%USERPROFILE%\.claude\settings.json` and merge the following `hooks` object into the existing top-level object. Replace every `C:\\path\\to\\codex-wezterm-notify` prefix with the absolute path to your clone. Keep existing hook event entries; Claude Code merges hook groups, but duplicate entries produce duplicate popups.
+Open `%USERPROFILE%\.claude\settings.json` and merge the following `hooks` object into the existing top-level object. Replace every `C:\\path\\to\\claude-codex-windows-notify` prefix with the absolute path to your clone. Keep existing hook event entries; Claude Code merges hook groups, but duplicate entries produce duplicate popups.
 
 ```json
 {
@@ -24,7 +24,7 @@ Open `%USERPROFILE%\.claude\settings.json` and merge the following `hooks` objec
           {
             "type": "command",
             "command": "powershell.exe",
-            "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\codex-wezterm-notify\\plugins\\codex-wezterm-notify\\scripts\\notify.ps1", "-Event", "ApprovalRequested", "-ProductName", "Claude"],
+            "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\claude-codex-windows-notify\\plugins\\claude-codex-windows-notify\\scripts\\notify.ps1", "-Event", "ApprovalRequested", "-ProductName", "Claude"],
             "timeout": 5
           }
         ]
@@ -37,7 +37,7 @@ Open `%USERPROFILE%\.claude\settings.json` and merge the following `hooks` objec
           {
             "type": "command",
             "command": "powershell.exe",
-            "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\codex-wezterm-notify\\plugins\\codex-wezterm-notify\\scripts\\notify.ps1", "-Event", "AttentionRequested", "-ProductName", "Claude"],
+            "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\claude-codex-windows-notify\\plugins\\claude-codex-windows-notify\\scripts\\notify.ps1", "-Event", "AttentionRequested", "-ProductName", "Claude"],
             "timeout": 5
           }
         ]
@@ -48,7 +48,7 @@ Open `%USERPROFILE%\.claude\settings.json` and merge the following `hooks` objec
           {
             "type": "command",
             "command": "powershell.exe",
-            "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\codex-wezterm-notify\\plugins\\codex-wezterm-notify\\scripts\\notify.ps1", "-Event", "BackgroundComplete", "-ProductName", "Claude"],
+            "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\claude-codex-windows-notify\\plugins\\claude-codex-windows-notify\\scripts\\notify.ps1", "-Event", "BackgroundComplete", "-ProductName", "Claude"],
             "timeout": 5
           }
         ]
@@ -60,7 +60,7 @@ Open `%USERPROFILE%\.claude\settings.json` and merge the following `hooks` objec
           {
             "type": "command",
             "command": "powershell.exe",
-            "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\codex-wezterm-notify\\plugins\\codex-wezterm-notify\\scripts\\notify.ps1", "-Event", "TurnComplete", "-ProductName", "Claude"],
+            "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\claude-codex-windows-notify\\plugins\\claude-codex-windows-notify\\scripts\\notify.ps1", "-Event", "TurnComplete", "-ProductName", "Claude"],
             "timeout": 5
           }
         ]
@@ -73,7 +73,7 @@ Open `%USERPROFILE%\.claude\settings.json` and merge the following `hooks` objec
           {
             "type": "command",
             "command": "powershell.exe",
-            "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\codex-wezterm-notify\\plugins\\codex-wezterm-notify\\scripts\\notify.ps1", "-Event", "TurnFailed", "-ProductName", "Claude"],
+            "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\claude-codex-windows-notify\\plugins\\claude-codex-windows-notify\\scripts\\notify.ps1", "-Event", "TurnFailed", "-ProductName", "Claude"],
             "timeout": 5
           }
         ]

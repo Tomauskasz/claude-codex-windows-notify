@@ -1,4 +1,4 @@
-# Codex WezTerm Notify
+# Claude/Codex Windows Notify
 
 Native Windows notifications for Codex and Claude Code, with exact-pane return for WezTerm.
 
@@ -42,8 +42,8 @@ Install for either agent, or both. They are independent and can be used together
 ### Codex
 
 ```powershell
-codex plugin marketplace add Tomauskasz/codex-wezterm-notify
-codex plugin add codex-wezterm-notify@codex-wezterm-notify
+codex plugin marketplace add Tomauskasz/claude-codex-windows-notify
+codex plugin add claude-codex-windows-notify@claude-codex-windows-notify
 ```
 
 Start a new Codex session, review the two bundled hooks, and trust them when prompted. The plugin registers:
@@ -62,12 +62,27 @@ Claude Code has no plugin hook mechanism, so it is configured through `%USERPROF
 - `Notification` for elicitation dialogs and background agents
 - `StopFailure` for API errors such as rate limits
 
+## Migrating from `codex-wezterm-notify`
+
+The project was renamed once WezTerm stopped being the only terminal it could return you to. GitHub redirects the old repository URL, but the Codex plugin ID changed, so an existing install must be replaced:
+
+```powershell
+codex plugin remove codex-wezterm-notify@codex-wezterm-notify
+codex plugin marketplace remove codex-wezterm-notify
+codex plugin marketplace add Tomauskasz/claude-codex-windows-notify
+codex plugin add claude-codex-windows-notify@claude-codex-windows-notify
+```
+
+You will be asked to trust the hooks again, because trust is recorded per plugin ID.
+
+For Claude Code, update the four `notify.ps1` paths in `settings.json` to the renamed `plugins\claude-codex-windows-notify` directory.
+
 ## Update
 
 Codex:
 
 ```powershell
-codex plugin marketplace upgrade codex-wezterm-notify
+codex plugin marketplace upgrade claude-codex-windows-notify
 ```
 
 Start a new Codex session after upgrading.
@@ -79,8 +94,8 @@ Claude Code reads the script from your clone on every hook invocation, so `git p
 Codex:
 
 ```powershell
-codex plugin remove codex-wezterm-notify@codex-wezterm-notify
-codex plugin marketplace remove codex-wezterm-notify
+codex plugin remove claude-codex-windows-notify@claude-codex-windows-notify
+codex plugin marketplace remove claude-codex-windows-notify
 ```
 
 For Claude Code, remove the hook entries you added to `settings.json`.
@@ -89,7 +104,7 @@ For Claude Code, remove the hook entries you added to `settings.json`.
 
 The hook decodes stdin as UTF-8, accepts an optional UTF-8 BOM, synchronously validates the JSON payload against the event it was registered for, and detects whether `WEZTERM_PANE` is available. For a WezTerm session it also captures the WezTerm executable and mux socket. It then starts a detached PowerShell worker with a bounded notification payload so the lifecycle hook returns immediately. Codex and Claude Code reach the same renderer; only the `-Event` and `-ProductName` arguments differ.
 
-The worker renders a WinForms popup. In WezTerm, clicking it uses the JSON CLI to activate the pane, resolves the owning GUI process, and focuses the matching native window without restoring, resizing, moving, or unsnapping it. Ambiguous window matches fail closed and produce `%TEMP%\codex-wezterm-notify.log` plus an error dialog.
+The worker renders a WinForms popup. In WezTerm, clicking it uses the JSON CLI to activate the pane, resolves the owning GUI process, and focuses the matching native window without restoring, resizing, moving, or unsnapping it. Ambiguous window matches fail closed and produce `%TEMP%\claude-codex-windows-notify.log` plus an error dialog.
 
 Outside WezTerm the hook records the process ancestry from itself towards the terminal host, and clicking the popup focuses the window of the app that hosts the session. This covers terminals embedded in another app: an integrated terminal in VS Code or Cursor hangs off a windowless pty-host process, so the first ancestor that owns a switchable window is the editor itself. The walk validates each hop against the parent's creation time, because Windows recycles process IDs, and stops before session managers and the shell so a stale ID cannot focus a stranger's window. When one host owns several windows, the deepest folder names of the session's working directory are matched against the window titles; a match that is not unique fails closed rather than guessing. Focus uses the same activation path as WezTerm, so it does not restore, resize, move, or unsnap the window either.
 
@@ -128,7 +143,7 @@ Validate the plugin manifest with Codex's plugin-creator validator:
 
 ```powershell
 python "$env:USERPROFILE\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py" `
-  ".\plugins\codex-wezterm-notify"
+  ".\plugins\claude-codex-windows-notify"
 ```
 
 The tests cover WezTerm and generic-terminal payloads, Codex and Claude Code event contracts, session-name resolution and its fallback to the session ID for both agents, process-ancestry capture and its boundary, window-title segment derivation, raw UTF-8 input and exact Unicode preservation, the documented completion-message field, invalid input, hook mismatches, Unicode-safe response limits, extended UNC paths, plugin-root command resolution, and forbidden internal agent dependencies.
