@@ -1,7 +1,7 @@
 {
   "name": "codex-wezterm-notify",
-  "version": "0.3.2",
-  "description": "Native Windows notifications for Codex, with exact-pane return for WezTerm.",
+  "version": "0.4.0",
+  "description": "Native Windows notifications for Codex and Claude Code, with exact-pane return for WezTerm.",
   "author": {
     "name": "Tomas Bitvinskas",
     "url": "https://github.com/Tomauskasz"
@@ -10,6 +10,8 @@
   "repository": "https://github.com/Tomauskasz/codex-wezterm-notify",
   "license": "MIT",
   "keywords": [
+    "claude",
+    "claude-code",
     "codex",
     "hooks",
     "notifications",
@@ -18,8 +20,8 @@
   ],
   "interface": {
     "displayName": "Codex WezTerm Notify",
-    "shortDescription": "Windows Codex notifications; enhanced for WezTerm",
-    "longDescription": "Shows completion and approval notifications with sound and response previews in native Windows terminals. WezTerm also gets click-to-focus for the exact originating pane.",
+    "shortDescription": "Windows notifications for Codex and Claude Code; enhanced for WezTerm",
+    "longDescription": "Shows completion and approval notifications with sound, the session name, and response previews for both Codex and Claude Code. Clicking a notification returns you to the session: the exact pane in WezTerm, or the window of the app hosting the terminal elsewhere, including an integrated terminal in VS Code or Cursor.",
     "developerName": "Tomas Bitvinskas",
     "category": "Productivity",
     "capabilities": [
@@ -28,7 +30,7 @@
     "websiteURL": "https://github.com/Tomauskasz/codex-wezterm-notify",
     "brandColor": "#A6E3A1",
     "defaultPrompt": [
-      "Explain how my Codex WezTerm notifications work"
+      "Explain how my Codex and Claude Code WezTerm notifications work"
     ]
   }
 }

@@ -1,19 +1,20 @@
 # Codex WezTerm Notify
 
-Native Windows notifications for Codex, with exact-pane return for WezTerm.
+Native Windows notifications for Codex and Claude Code, with exact-pane return for WezTerm.
 
-When Codex finishes a turn or needs approval, the plugin shows a compact popup with sound, session and working-directory context, and a response preview. It works from native Windows terminal emulators; in WezTerm, clicking the popup returns to the exact pane that produced it.
+When either agent finishes a turn or needs approval, you get a compact popup with sound, the session name and working directory, and a response preview. Clicking it returns you to the session that produced it: the exact pane in WezTerm, or the window of the app hosting the terminal everywhere else, including an integrated terminal inside VS Code or Cursor.
 
-The same renderer can also be wired to Claude Code's lifecycle hooks. See [Use with Claude Code](docs/claude-code.md).
+Both agents are first-class. One renderer serves both, and each is wired through its own native hook mechanism: a plugin for Codex, the settings file for Claude Code.
 
 ## Features
 
-- Completion and approval-request notifications from Codex lifecycle hooks
-- Final-response preview using Codex's supported `last_assistant_message` field
+- Completion and approval-request notifications from Codex and Claude Code lifecycle hooks
+- Final-response preview using each agent's supported `last_assistant_message` field
+- Session name on the popup, read from each agent's own session records
+- Click-to-return: the exact pane in WezTerm, the host app's window elsewhere
 - UTF-8 previews for punctuation, non-Latin scripts, and emoji
-- Distinct sound and color for completion versus approval
-- Popup on the current monitor, or the originating WezTerm window's monitor
-- WezTerm-only click-to-activate for the originating pane and Windows window
+- Distinct sound and color for completion versus approval versus failure
+- Popup on the originating session's monitor
 - Twenty-second timeout that pauses while hovered
 - No PowerShell modules or other runtime dependencies
 
@@ -21,18 +22,24 @@ The same renderer can also be wired to Claude Code's lifecycle hooks. See [Use w
 
 - Windows 10 or 11
 - Windows PowerShell 5.1 in Full Language mode
-- Codex CLI with plugin and lifecycle-hook support
+- One or both of:
+  - Codex CLI with plugin and lifecycle-hook support
+  - Claude Code 2.1.198 or newer, for the full notification event set
 - Optional: native Windows WezTerm with `wezterm cli list`, `list-clients`, and `activate-pane` for exact-pane return
 
-Codex must run natively on Windows with an interactive desktop. WSL and SSH-domain compatibility has not been verified.
+The agent must run natively on Windows with an interactive desktop. WSL and SSH-domain compatibility has not been verified.
 
 ### Terminal support
 
-The notification is ordinary Windows UI, so it does not depend on terminal-native notification support. In Windows Terminal, Alacritty, and other native Windows terminals, it appears on the monitor containing the pointer; clicking it dismisses it.
+The notification is ordinary Windows UI, so it does not depend on terminal-native notification support. It works in Windows Terminal, Alacritty, other native Windows terminals, and terminals embedded in another app such as VS Code or Cursor.
 
-When `WEZTERM_PANE` is available, the plugin additionally uses WezTerm's supported CLI to locate the originating monitor and return to the exact pane on click. Other terminals do not expose an equivalent verified exact-pane activation path, so the plugin does not guess. See [the terminal support research](research/terminal-support.md) for the primary-source compatibility matrix.
+Click-to-return comes in two levels. When `WEZTERM_PANE` is available, WezTerm's supported CLI locates the originating monitor and returns to the exact pane. Everywhere else, the notification focuses the window of the app hosting the terminal, because no other terminal exposes a verified exact-pane activation path and the implementation does not guess. See [the terminal support research](research/terminal-support.md) for the primary-source compatibility matrix.
 
 ## Install
+
+Install for either agent, or both. They are independent and can be used together.
+
+### Codex
 
 ```powershell
 codex plugin marketplace add Tomauskasz/codex-wezterm-notify
@@ -46,7 +53,18 @@ Start a new Codex session, review the two bundled hooks, and trust them when pro
 
 No manual `config.toml` changes are required.
 
+### Claude Code
+
+Claude Code has no plugin hook mechanism, so it is configured through `%USERPROFILE%\.claude\settings.json`. Merge the hook block from [Install for Claude Code](docs/claude-code.md) into that file. It registers four events:
+
+- `Stop` for completed turns
+- `PermissionRequest` for approval prompts and `AskUserQuestion`
+- `Notification` for elicitation dialogs and background agents
+- `StopFailure` for API errors such as rate limits
+
 ## Update
+
+Codex:
 
 ```powershell
 codex plugin marketplace upgrade codex-wezterm-notify
@@ -54,30 +72,46 @@ codex plugin marketplace upgrade codex-wezterm-notify
 
 Start a new Codex session after upgrading.
 
+Claude Code reads the script from your clone on every hook invocation, so `git pull` is enough. Restart a running session only if the hook list itself changed.
+
 ## Uninstall
+
+Codex:
 
 ```powershell
 codex plugin remove codex-wezterm-notify@codex-wezterm-notify
 codex plugin marketplace remove codex-wezterm-notify
 ```
 
+For Claude Code, remove the hook entries you added to `settings.json`.
+
 ## How it works
 
-The hook decodes stdin as UTF-8, accepts an optional UTF-8 BOM, synchronously validates the JSON payload, and detects whether `WEZTERM_PANE` is available. For a WezTerm session it also captures the WezTerm executable and mux socket. It then starts a detached PowerShell worker with a bounded notification payload so the lifecycle hook returns immediately.
+The hook decodes stdin as UTF-8, accepts an optional UTF-8 BOM, synchronously validates the JSON payload against the event it was registered for, and detects whether `WEZTERM_PANE` is available. For a WezTerm session it also captures the WezTerm executable and mux socket. It then starts a detached PowerShell worker with a bounded notification payload so the lifecycle hook returns immediately. Codex and Claude Code reach the same renderer; only the `-Event` and `-ProductName` arguments differ.
 
-The worker renders a WinForms popup. In WezTerm, clicking it uses the JSON CLI to activate the pane, resolves the owning GUI process, and focuses the matching native window without restoring, resizing, moving, or unsnapping it. Ambiguous window matches fail closed and produce `%TEMP%\codex-wezterm-notify.log` plus an error dialog. In other terminals, clicking the popup only dismisses it.
+The worker renders a WinForms popup. In WezTerm, clicking it uses the JSON CLI to activate the pane, resolves the owning GUI process, and focuses the matching native window without restoring, resizing, moving, or unsnapping it. Ambiguous window matches fail closed and produce `%TEMP%\codex-wezterm-notify.log` plus an error dialog.
 
-The implementation deliberately does not read Codex's internal SQLite database or transcript format.
+Outside WezTerm the hook records the process ancestry from itself towards the terminal host, and clicking the popup focuses the window of the app that hosts the session. This covers terminals embedded in another app: an integrated terminal in VS Code or Cursor hangs off a windowless pty-host process, so the first ancestor that owns a switchable window is the editor itself. The walk validates each hop against the parent's creation time, because Windows recycles process IDs, and stops before session managers and the shell so a stale ID cannot focus a stranger's window. When one host owns several windows, the deepest folder names of the session's working directory are matched against the window titles; a match that is not unique fails closed rather than guessing. Focus uses the same activation path as WezTerm, so it does not restore, resize, move, or unsnap the window either.
+
+The popup labels the notification with the session name instead of the session ID. For Codex it reads
+`$env:CODEX_HOME\session_index.jsonl` (default `~\.codex`); for Claude Code it reads the session records in
+`$env:CLAUDE_CONFIG_DIR\sessions` (default `~\.claude`). Both lookups are read-only and best effort: a session
+with no name, or an unreadable record, falls back to the session ID.
+
+The implementation deliberately does not read either agent's internal SQLite database or transcript format.
 
 ## Privacy
 
-The response preview, session ID, and working directory are rendered locally on screen. The plugin makes no network requests and uploads nothing. Anyone who can see your desktop may see notification content.
+The response preview, session name, and working directory are rendered locally on screen. The plugin makes no network requests and uploads nothing. Anyone who can see your desktop may see notification content.
 
 ## Limitations
 
 - Windows may refuse foreground activation in some focus-stealing-policy scenarios; the plugin reports that failure instead of silently claiming success.
 - If the originating pane or window has closed, click-to-focus cannot succeed.
-- Exact-pane focus and originating-monitor placement are available only in WezTerm; other terminals use notify-only behavior.
+- A minimized host window is not restored, because activation deliberately never changes window geometry. Windows still reports the activation as successful, so clicking a notification for a minimized window currently does nothing visible and reports nothing.
+- Exact-pane focus is available only in WezTerm. VS Code, Cursor, and Windows Terminal expose no way to focus one terminal tab or split, so clicking a notification from those hosts raises the window and no more.
+- One editor instance shares a single pty host across all of its windows, so which window holds the terminal cannot be read from process ancestry. Window-title matching covers the usual case of a workspace named after its folder, and a custom `window.title` or two workspaces with the same folder name will read as ambiguous.
+- Sessions reached over SSH or a remote multiplexer cannot be focused, because the host window is not on this machine.
 - WSL and SSH-domain compatibility is not verified.
 - Concurrent notifications can overlap.
 - Popup rendering and focus behavior require an interactive Windows desktop and therefore are not exercised in GitHub Actions.
@@ -97,7 +131,9 @@ python "$env:USERPROFILE\.codex\skills\.system\plugin-creator\scripts\validate_p
   ".\plugins\codex-wezterm-notify"
 ```
 
-The tests cover WezTerm and generic-terminal payloads, Codex and Claude event contracts, raw UTF-8 input and exact Unicode preservation, the documented completion-message field, invalid input, hook mismatches, Unicode-safe response limits, extended UNC paths, plugin-root command resolution, and forbidden internal Codex dependencies.
+The tests cover WezTerm and generic-terminal payloads, Codex and Claude Code event contracts, session-name resolution and its fallback to the session ID for both agents, process-ancestry capture and its boundary, window-title segment derivation, raw UTF-8 input and exact Unicode preservation, the documented completion-message field, invalid input, hook mismatches, Unicode-safe response limits, extended UNC paths, plugin-root command resolution, and forbidden internal agent dependencies.
+
+Popup rendering, click-to-focus, and window activation need an interactive desktop, so they are verified manually rather than in the suite.
 
 ## License
 

@@ -8,6 +8,8 @@ Ship this release as **`codex-wezterm-notify`** with two explicit capability lev
 
 Notify-only mode is supported behavior, not an exact-focus adapter. Its click action dismisses the popup, and the documentation must not imply that another terminal will be activated.
 
+> **Superseded 2026-07-30.** Notify-only mode no longer dismisses on click. A third capability level now sits between the two above: outside WezTerm the notification focuses the *window* of the app hosting the terminal, resolved from validated process ancestry. This was prompted by terminals embedded in another app, where the notification was previously inert. It is still not exact focus, and the matrix column "Supported exact activation" below stands unchanged: no terminal other than WezTerm can be told to focus one specific pane or tab. The README is the source of truth for shipped behavior.
+
 Keep the implementation as one Windows popup path with a conditional WezTerm capability. A terminal-adapter abstraction or repository rename would still be speculative: only WezTerm satisfies the full exact-pane contract.
 
 ## Matrix
@@ -67,6 +69,8 @@ Alacritty supports Windows, but its Windows ConPTY launcher only passes inherite
 - [`bell.command` configuration](https://github.com/alacritty/alacritty/blob/master/extra/man/alacritty.5.scd#L495-L525)
 
 Because Alacritty has no tabs/splits of its own, process/HWND ancestry could produce a best-effort Windows focus hack in simple single-process cases. It fails as a supported design once multiple Alacritty windows share a process or a shell is mediated by WSL, so it should not be called an adapter.
+
+> **Revised 2026-07-30.** Ancestry-based window focus did ship, as a generic capability rather than a per-terminal adapter, because embedded terminals left the notification with nothing to click. The objection above was answered rather than dismissed: the multiple-windows-share-a-process case is resolved by matching the working directory's folder names against window titles, and a non-unique match refuses to act instead of guessing. The WSL case remains unsupported, as does anything where the host window is not on this machine.
 
 ### kitty
 

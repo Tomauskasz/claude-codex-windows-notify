@@ -1,6 +1,8 @@
-# Use with Claude Code
+# Install for Claude Code
 
-The bundled PowerShell renderer also accepts Claude Code hook payloads. This is a manual user-level integration; the Codex plugin commands do not install Claude hooks.
+Claude Code is a fully supported target, not an add-on. It reaches the same renderer as Codex, through a wider set of lifecycle events.
+
+Claude Code has no plugin hook mechanism, so its hooks live in your user settings file instead of a plugin manifest. That is the only difference in how the two agents are wired.
 
 ## Requirements
 
@@ -10,7 +12,7 @@ The bundled PowerShell renderer also accepts Claude Code hook payloads. This is 
 
 ## Configure
 
-Open `%USERPROFILE%\.claude\settings.json` and merge the following `hooks` object into the existing top-level object. Replace every `C:\\path\\to\\codex-wezterm-notify` prefix with the absolute path to your clone. Keep existing hook event entries; Claude merges hook groups, but duplicate entries produce duplicate popups.
+Open `%USERPROFILE%\.claude\settings.json` and merge the following `hooks` object into the existing top-level object. Replace every `C:\\path\\to\\codex-wezterm-notify` prefix with the absolute path to your clone. Keep existing hook event entries; Claude Code merges hook groups, but duplicate entries produce duplicate popups.
 
 ```json
 {
@@ -87,6 +89,15 @@ These hooks notify for:
 - MCP elicitation dialogs and background agents waiting for input
 - main-turn completion and background-agent completion
 - API failures such as rate limits or authentication errors
+
+That is a wider event set than the Codex plugin registers, because Claude Code exposes more lifecycle events.
+
+The popup's second line shows the Claude session name (the one `/rename` sets, or the derived default) read from
+`%USERPROFILE%\.claude\sessions`. Sessions with no name record fall back to the session ID.
+
+Clicking the popup focuses the originating session. In WezTerm this activates the exact pane. For a Claude session started
+in an integrated terminal inside VS Code or Cursor, it raises that editor window instead; the editor exposes no way to
+focus one terminal tab, so finding the terminal within the window is left to you.
 
 The renderer detaches immediately, so the five-second hook timeout does not limit how long the popup remains visible.
 

@@ -18,18 +18,29 @@ $utf8WithoutBom = New-Object Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8WithoutBom
 $OutputEncoding = [Console]::OutputEncoding
 
+# The worker only learns its product once the notification payload is decoded, so a failure before
+# that point must not put either product's name on the dialog.
+$script:productLabel = if ($Worker) { "" } else { $ProductName }
+
 function Write-WorkerFailure {
     param([string]$Message)
 
+    $logPath = Join-Path $env:TEMP "codex-wezterm-notify.log"
     $diagnostic = "[$([DateTime]::UtcNow.ToString('o'))] $Message"
     try {
-        Add-Content -LiteralPath (Join-Path $env:TEMP "codex-wezterm-notify.log") -Value $diagnostic -Encoding UTF8
+        Add-Content -LiteralPath $logPath -Value $diagnostic -Encoding UTF8
     } catch {}
     try {
         Add-Type -AssemblyName System.Windows.Forms
+        $caption = if ($script:productLabel) { "$($script:productLabel) notification error" } else { "Notification error" }
+        $body = if ($script:productLabel) {
+            "$($script:productLabel) notifications failed. See $logPath."
+        } else {
+            "The notification failed. See $logPath."
+        }
         [Windows.Forms.MessageBox]::Show(
-            "Codex WezTerm Notify failed. See $env:TEMP\codex-wezterm-notify.log.",
-            "Codex notification error",
+            $body,
+            $caption,
             [Windows.Forms.MessageBoxButtons]::OK,
             [Windows.Forms.MessageBoxIcon]::Error
         ) | Out-Null
@@ -92,6 +103,170 @@ function Normalize-DisplayPath {
     return $Path
 }
 
+function Get-ClaudeSessionName {
+    param([string]$SessionId)
+
+    $configDirectory = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }
+    $sessionDirectory = Join-Path $configDirectory "sessions"
+    if (-not (Test-Path -LiteralPath $sessionDirectory)) {
+        return ""
+    }
+
+    foreach ($file in @(Get-ChildItem -LiteralPath $sessionDirectory -Filter "*.json" -File -ErrorAction SilentlyContinue)) {
+        try {
+            $record = Get-Content -Raw -LiteralPath $file.FullName -ErrorAction Stop | ConvertFrom-Json
+        } catch {
+            continue
+        }
+        if ([string]$record.sessionId -eq $SessionId) {
+            return [string]$record.name
+        }
+    }
+    return ""
+}
+
+function Get-CodexSessionName {
+    param([string]$SessionId)
+
+    $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME ".codex" }
+    $indexPath = Join-Path $codexHome "session_index.jsonl"
+    if (-not (Test-Path -LiteralPath $indexPath)) {
+        return ""
+    }
+
+    $name = ""
+    foreach ($line in @(Get-Content -LiteralPath $indexPath -ErrorAction SilentlyContinue)) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+        try {
+            $record = $line | ConvertFrom-Json
+        } catch {
+            continue
+        }
+        if ([string]$record.id -eq $SessionId) {
+            $name = [string]$record.thread_name
+        }
+    }
+    return $name
+}
+
+function Resolve-SessionName {
+    param([string]$SessionId)
+
+    $name = ""
+    try {
+        $name = if ($ProductName -eq "Claude") {
+            Get-ClaudeSessionName $SessionId
+        } else {
+            Get-CodexSessionName $SessionId
+        }
+    } catch {
+        $name = ""
+    }
+
+    if ([string]::IsNullOrWhiteSpace($name)) {
+        return $SessionId
+    }
+    return $name.Trim()
+}
+
+# Session managers and shell infrastructure. Climbing past one of these leaves the terminal
+# host behind, so the walk stops before it rather than focusing the desktop or a service host.
+$processTreeBoundaryNames = @(
+    "[system process]",
+    "system",
+    "csrss.exe",
+    "dllhost.exe",
+    "explorer.exe",
+    "lsass.exe",
+    "runtimebroker.exe",
+    "services.exe",
+    "sihost.exe",
+    "smss.exe",
+    "svchost.exe",
+    "taskhostw.exe",
+    "userinit.exe",
+    "wininit.exe",
+    "winlogon.exe"
+)
+
+# Walks from this process towards the terminal host and returns the candidate ancestors,
+# nearest first. The chain must be captured here: the popup worker is detached, so by the time
+# the user clicks, its own parent has already exited and the ancestry is no longer walkable.
+function Get-HostProcessChain {
+    param([int]$MaximumDepth = 12)
+
+    $processes = @{}
+    foreach ($row in [CodexProcessTree]::Snapshot()) {
+        $fields = $row.Split([char]"|", 3)
+        if ($fields.Count -lt 3) {
+            continue
+        }
+        $processId = 0
+        $parentProcessId = 0
+        if (-not [int]::TryParse($fields[0], [ref]$processId)) {
+            continue
+        }
+        if (-not [int]::TryParse($fields[1], [ref]$parentProcessId)) {
+            continue
+        }
+        $processes[$processId] = [pscustomobject]@{
+            ProcessId       = $processId
+            ParentProcessId = $parentProcessId
+            Name            = $fields[2]
+        }
+    }
+
+    $creationTimes = @{}
+    function Get-CachedCreationTime {
+        param([int]$ProcessId)
+
+        if (-not $creationTimes.ContainsKey($ProcessId)) {
+            $creationTimes[$ProcessId] = [CodexProcessTree]::GetCreationTime($ProcessId)
+        }
+        return $creationTimes[$ProcessId]
+    }
+
+    $chain = @()
+    $visited = @{}
+    $current = $processes[[int]$PID]
+    if (-not $current) {
+        return $chain
+    }
+    $visited[$current.ProcessId] = $true
+
+    while ($chain.Count -lt $MaximumDepth) {
+        $parent = $processes[[int]$current.ParentProcessId]
+        if (-not $parent) {
+            break
+        }
+        if ($visited.ContainsKey($parent.ProcessId)) {
+            break
+        }
+        if ($processTreeBoundaryNames -contains ([string]$parent.Name).ToLowerInvariant()) {
+            break
+        }
+
+        # Windows recycles process IDs, so a parent ID can point at an unrelated process that
+        # started after its claimed child. Reject that instead of focusing a stranger's window.
+        $parentCreation = Get-CachedCreationTime $parent.ProcessId
+        $currentCreation = Get-CachedCreationTime $current.ProcessId
+        if ($parentCreation -lt 0 -or $currentCreation -lt 0 -or $parentCreation -gt $currentCreation) {
+            break
+        }
+
+        $visited[$parent.ProcessId] = $true
+        $chain += [pscustomobject]@{
+            pid  = $parent.ProcessId
+            name = $parent.Name
+        }
+        $current = $parent
+    }
+
+    return $chain
+}
+
 function Resolve-WezTermExecutable {
     if ($env:WEZTERM_EXECUTABLE_DIR) {
         $candidate = Join-Path $env:WEZTERM_EXECUTABLE_DIR "wezterm.exe"
@@ -105,7 +280,7 @@ function Resolve-WezTermExecutable {
         return $command.Source
     }
 
-    throw "wezterm.exe was not found. Run Codex inside native Windows WezTerm."
+    throw "wezterm.exe was not found. Run $ProductName inside native Windows WezTerm."
 }
 
 function New-NotificationData {
@@ -185,15 +360,17 @@ function New-NotificationData {
 
     return [ordered]@{
         event                = $NotificationEvent
+        product_name         = $ProductName
         title                = $title
         message              = Limit-Text $message 1000
         sound_path           = $soundPath
-        session_name         = Limit-Text $sessionId 120
+        session_name         = Limit-Text (Resolve-SessionName $sessionId) 120
         working_directory    = Limit-Text $workingDirectory 500
         terminal_integration = $terminalIntegration
         source_pane_id       = $sourcePaneId
         wezterm_executable   = $weztermExecutable
         wezterm_socket       = $weztermSocket
+        host_process_chain   = @(Get-HostProcessChain)
     }
 }
 
@@ -204,31 +381,23 @@ if ($Worker) {
     $notificationData = [Text.Encoding]::UTF8.GetString(
         [Convert]::FromBase64String($DataBase64)
     ) | ConvertFrom-Json
+    $script:productLabel = [string]$notificationData.product_name
 } else {
     $payload = [Console]::In.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($payload)) {
-        throw "Codex hook payload was empty."
+        throw "$ProductName hook payload was empty."
     }
     $payload = $payload.TrimStart([char]0xFEFF)
 
     try {
         $hookData = $payload | ConvertFrom-Json
     } catch {
-        throw "Codex hook payload was not valid JSON: $($_.Exception.Message)"
+        throw "$ProductName hook payload was not valid JSON: $($_.Exception.Message)"
     }
 
-    $notificationData = New-NotificationData $hookData $Event
-    if ($DryRun) {
-        $notificationData | ConvertTo-Json -Depth 5
-        return
-    }
-
-    $dataJson = $notificationData | ConvertTo-Json -Compress -Depth 5
-    $encodedData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($dataJson))
-    $arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
-        $PSCommandPath + '" -Worker -DataBase64 ' + $encodedData
 Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -312,7 +481,137 @@ public static void Start(string executable, string arguments)
 }
 }
 
+public static class CodexProcessTree
+{
+private const uint TH32CS_SNAPPROCESS = 0x00000002;
+private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+private struct ProcessEntry32
+{
+    public int size;
+    public int usage;
+    public int processId;
+    public IntPtr defaultHeapId;
+    public int moduleId;
+    public int threadCount;
+    public int parentProcessId;
+    public int priorityClassBase;
+    public int flags;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+    public string executableFile;
+}
+
+[DllImport("kernel32.dll", SetLastError = true)]
+private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+private static extern bool Process32FirstW(IntPtr snapshot, ref ProcessEntry32 entry);
+
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+private static extern bool Process32NextW(IntPtr snapshot, ref ProcessEntry32 entry);
+
+[DllImport("kernel32.dll", SetLastError = true)]
+private static extern bool CloseHandle(IntPtr handle);
+
+[DllImport("kernel32.dll", SetLastError = true)]
+private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
+
+[DllImport("kernel32.dll", SetLastError = true)]
+private static extern bool GetProcessTimes(
+    IntPtr process,
+    out long creation,
+    out long exit,
+    out long kernel,
+    out long user);
+
+// Each row is "processId|parentProcessId|executableName".
+public static string[] Snapshot()
+{
+    // CreateToolhelp32Snapshot is documented to fail with ERROR_BAD_LENGTH while the process
+    // list is changing under it, and to be worth retrying when it does.
+    const int ERROR_BAD_LENGTH = 24;
+    IntPtr snapshot = new IntPtr(-1);
+    int lastError = 0;
+    for (int attempt = 0; attempt < 4; attempt++)
+    {
+        snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot != new IntPtr(-1))
+        {
+            break;
+        }
+        lastError = Marshal.GetLastWin32Error();
+        if (lastError != ERROR_BAD_LENGTH)
+        {
+            break;
+        }
+    }
+    if (snapshot == new IntPtr(-1))
+    {
+        throw new Win32Exception(lastError);
+    }
+
+    try
+    {
+        List<string> rows = new List<string>();
+        ProcessEntry32 entry = new ProcessEntry32();
+        entry.size = Marshal.SizeOf(typeof(ProcessEntry32));
+        if (Process32FirstW(snapshot, ref entry))
+        {
+            do
+            {
+                rows.Add(entry.processId + "|" + entry.parentProcessId + "|" + entry.executableFile);
+            }
+            while (Process32NextW(snapshot, ref entry));
+        }
+        return rows.ToArray();
+    }
+    finally
+    {
+        CloseHandle(snapshot);
+    }
+}
+
+// Returns the process creation time as a FILETIME tick count, or -1 when it cannot be read.
+public static long GetCreationTime(int processId)
+{
+    IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+    if (process == IntPtr.Zero)
+    {
+        return -1;
+    }
+
+    try
+    {
+        long creation;
+        long exit;
+        long kernel;
+        long user;
+        if (!GetProcessTimes(process, out creation, out exit, out kernel, out user))
+        {
+            return -1;
+        }
+        return creation;
+    }
+    finally
+    {
+        CloseHandle(process);
+    }
+}
+}
+
 '@
+
+    $notificationData = New-NotificationData $hookData $Event
+    if ($DryRun) {
+        $notificationData | ConvertTo-Json -Depth 5
+        return
+    }
+
+    $dataJson = $notificationData | ConvertTo-Json -Compress -Depth 5
+    $encodedData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($dataJson))
+    $arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+        $PSCommandPath + '" -Worker -DataBase64 ' + $encodedData
 
     [CodexDetachedProcess]::Start((Join-Path $PSHOME "powershell.exe"), $arguments)
     return
@@ -383,6 +682,16 @@ public static class CodexWindowFocus
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr window, StringBuilder text, int maximum);
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr window, uint command);
+
+    [DllImport("user32.dll")]
+    private static extern int GetWindowLong(IntPtr window, int index);
+
+    private const uint GW_OWNER = 4;
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_TOOLWINDOW = 0x00000080;
+
     public static IntPtr[] GetProcessWindows(uint processId)
     {
         List<IntPtr> windows = new List<IntPtr>();
@@ -394,6 +703,38 @@ public static class CodexWindowFocus
             {
                 windows.Add(window);
             }
+            return true;
+        }, IntPtr.Zero);
+        return windows.ToArray();
+    }
+
+    // Windows a user can actually switch to: visible, unowned, not a tool window, and titled.
+    // Electron hosts such as VS Code and Cursor own several hidden and untitled helper windows
+    // that would otherwise make every multi-window instance look ambiguous.
+    public static IntPtr[] GetAppWindows(uint processId)
+    {
+        List<IntPtr> windows = new List<IntPtr>();
+        EnumWindows(delegate(IntPtr window, IntPtr parameter)
+        {
+            uint ownerProcessId;
+            GetWindowThreadProcessId(window, out ownerProcessId);
+            if (ownerProcessId != processId || !IsWindowVisible(window))
+            {
+                return true;
+            }
+            if (GetWindow(window, GW_OWNER) != IntPtr.Zero)
+            {
+                return true;
+            }
+            if ((GetWindowLong(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0)
+            {
+                return true;
+            }
+            if (GetWindowTitle(window).Trim().Length == 0)
+            {
+                return true;
+            }
+            windows.Add(window);
             return true;
         }, IntPtr.Zero);
         return windows.ToArray();
@@ -458,6 +799,10 @@ $workingDirectory = [string]$notificationData.working_directory
 $terminalIntegration = [string]$notificationData.terminal_integration
 $sourcePaneId = [string]$notificationData.source_pane_id
 $weztermCli = [string]$notificationData.wezterm_executable
+$hostProcessChain = @()
+if ($notificationData.host_process_chain) {
+    $hostProcessChain = @($notificationData.host_process_chain)
+}
 if ($terminalIntegration -eq "wezterm" -and $notificationData.wezterm_socket) {
     $env:WEZTERM_UNIX_SOCKET = [string]$notificationData.wezterm_socket
 }
@@ -532,6 +877,103 @@ function Get-OriginatingWindowHandle {
     return [IntPtr]::Zero
 }
 
+# Directory names that can plausibly appear in a host window title, deepest first. Editors title
+# their windows after the workspace folder, so the leaf of a deeper cwd is tried first and the walk
+# stops at the profile directory or drive root to avoid matching on "Users" or a drive letter.
+function Get-WorkingDirectoryTitleSegments {
+    param([string]$Path)
+
+    $segments = @()
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $segments
+    }
+
+    $boundaries = @()
+    if ($env:USERPROFILE) {
+        $boundaries += $env:USERPROFILE.TrimEnd([char]"\", [char]"/")
+    }
+    try {
+        $boundaries += ([string][IO.Path]::GetPathRoot($Path)).TrimEnd([char]"\", [char]"/")
+    } catch {}
+
+    $current = $Path.TrimEnd([char]"\", [char]"/")
+    while ($segments.Count -lt 6 -and -not [string]::IsNullOrWhiteSpace($current)) {
+        $atBoundary = @($boundaries | Where-Object {
+            $_ -and $current.Equals($_, [StringComparison]::OrdinalIgnoreCase)
+        }).Count -gt 0
+        if ($atBoundary) {
+            break
+        }
+
+        $leaf = Split-Path -Leaf $current
+        if ([string]::IsNullOrWhiteSpace($leaf) -or $leaf.Length -lt 2 -or $leaf -eq $current) {
+            break
+        }
+        $segments += $leaf
+
+        $parent = Split-Path -Parent $current
+        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $current) {
+            break
+        }
+        $current = $parent.TrimEnd([char]"\", [char]"/")
+    }
+
+    return $segments
+}
+
+function Select-HostWindowByWorkingDirectory {
+    param($Windows)
+
+    foreach ($segment in @(Get-WorkingDirectoryTitleSegments $workingDirectory)) {
+        $titleMatches = @($Windows | Where-Object {
+            [CodexWindowFocus]::GetWindowTitle($_).IndexOf($segment, [StringComparison]::OrdinalIgnoreCase) -ge 0
+        })
+        if ($titleMatches.Count -eq 1) {
+            return [IntPtr]$titleMatches[0]
+        }
+    }
+    return [IntPtr]::Zero
+}
+
+# Resolves the window of the app hosting this session: the nearest captured ancestor that owns a
+# switchable window. Terminals inside VS Code and Cursor hang off a windowless pty-host process,
+# so the first ancestor with a window is the editor itself.
+function Get-HostWindowHandle {
+    foreach ($entry in $hostProcessChain) {
+        $processId = 0
+        if (-not [int]::TryParse([string]$entry.pid, [ref]$processId)) {
+            continue
+        }
+
+        $windows = @([CodexWindowFocus]::GetAppWindows([uint32]$processId))
+        if ($windows.Count -eq 0) {
+            continue
+        }
+        if ($windows.Count -eq 1) {
+            return [IntPtr]$windows[0]
+        }
+
+        # One editor instance shares a single pty host across all of its windows, so ancestry
+        # cannot say which window holds this terminal. Fall back to the workspace name.
+        return (Select-HostWindowByWorkingDirectory $windows)
+    }
+    return [IntPtr]::Zero
+}
+
+function Show-OriginatingHostWindow {
+    if ($hostProcessChain.Count -eq 0) {
+        throw "The process ancestry of the originating session is unavailable."
+    }
+
+    $windowHandle = Get-HostWindowHandle
+    if ($windowHandle -eq [IntPtr]::Zero) {
+        throw "The window of the app hosting this session could not be identified unambiguously."
+    }
+    if (-not [CodexWindowFocus]::ActivateWindow($windowHandle)) {
+        throw "Windows refused to focus the app hosting this session."
+    }
+}
+
 function Show-OriginatingPane {
     if (-not $sourcePaneId -or -not $weztermCli) {
         throw "The originating WezTerm pane context is unavailable."
@@ -566,7 +1008,7 @@ $form.StartPosition = [Windows.Forms.FormStartPosition]::Manual
 $originatingWindow = if ($terminalIntegration -eq "wezterm") {
     Get-OriginatingWindowHandle
 } else {
-    [IntPtr]::Zero
+    Get-HostWindowHandle
 }
 $screen = if ($originatingWindow -ne [IntPtr]::Zero) {
     [Windows.Forms.Screen]::FromHandle($originatingWindow).WorkingArea
@@ -694,7 +1136,11 @@ $form.Add_Paint({
 $activatePopup = {
     $timer.Stop()
     try {
-        Show-OriginatingPane
+        if ($terminalIntegration -eq "wezterm") {
+            Show-OriginatingPane
+        } else {
+            Show-OriginatingHostWindow
+        }
         $form.Hide()
         $form.Close()
     } catch {
@@ -703,7 +1149,8 @@ $activatePopup = {
     }
 }
 $dismissPopup = { $timer.Stop(); $form.Close() }
-$primaryClick = if ($terminalIntegration -eq "wezterm") { $activatePopup } else { $dismissPopup }
+$canFocusOrigin = ($terminalIntegration -eq "wezterm") -or ($hostProcessChain.Count -gt 0)
+$primaryClick = if ($canFocusOrigin) { $activatePopup } else { $dismissPopup }
 $hoverOn = { $form.BackColor = [Drawing.Color]::FromArgb(30, 30, 46); $timer.Stop() }
 $hoverOff = { $form.BackColor = [Drawing.Color]::FromArgb(24, 24, 37); $timer.Start() }
 

@@ -21,6 +21,24 @@ function Assert-True {
     }
 }
 
+function Get-NotifierFunctionSource {
+    param([string]$Name)
+
+    $parseErrors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($notifier, [ref]$null, [ref]$parseErrors)
+    if ($parseErrors) {
+        throw "Notifier failed to parse: $($parseErrors[0].Message)"
+    }
+    $definition = $ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $Name
+    }, $true) | Select-Object -First 1
+    if (-not $definition) {
+        throw "Notifier does not define a function named '$Name'."
+    }
+    return $definition.Extent.Text
+}
+
 function Assert-ProcessSucceeded {
     param($Result, [string]$Message)
     if ($Result.ExitCode -ne 0) {
@@ -70,6 +88,13 @@ try {
     $env:WEZTERM_EXECUTABLE_DIR = $temporaryDirectory
     $env:WEZTERM_PANE = "42"
     $env:WEZTERM_UNIX_SOCKET = "test-socket"
+
+    $codexHome = Join-Path $temporaryDirectory "codex-home"
+    $claudeSessionDirectory = Join-Path $temporaryDirectory "claude-home\sessions"
+    New-Item -ItemType Directory -Path $codexHome | Out-Null
+    New-Item -ItemType Directory -Path $claudeSessionDirectory -Force | Out-Null
+    $env:CODEX_HOME = $codexHome
+    $env:CLAUDE_CONFIG_DIR = Join-Path $temporaryDirectory "claude-home"
 
     $null = [scriptblock]::Create((Get-Content -Raw -LiteralPath $notifier))
 
@@ -121,6 +146,8 @@ try {
     Assert-ProcessSucceeded $claudeStopResult "Claude Stop fixture should succeed."
     $claudeStop = $claudeStopResult.Stdout | ConvertFrom-Json
     Assert-Equal $claudeStop.title "Claude finished" "Product name should drive the completion title."
+    Assert-Equal $claudeStop.product_name "Claude" "The payload should name the product so the detached worker can too."
+    Assert-Equal $stop.product_name "Codex" "The payload should name the product for Codex sessions as well."
 
     $notificationPayload = [ordered]@{
         cwd = "C:\work\demo"
@@ -191,13 +218,82 @@ try {
     Assert-True ($mismatchedResult.ExitCode -ne 0) "Mismatched hook type should fail."
     Assert-True ($mismatchedResult.Stderr -match "Expected a Stop hook payload") "Mismatched hook type should report the contract error."
 
+    $codexIndexLines = @(
+        (@{ id = "codex-other-session"; thread_name = "Unrelated" } | ConvertTo-Json -Compress),
+        (@{ id = "codex-named-session"; thread_name = "Stale name" } | ConvertTo-Json -Compress),
+        "",
+        "not-json",
+        (@{ id = "codex-named-session"; thread_name = "Notifs" } | ConvertTo-Json -Compress)
+    )
+    Set-Content -LiteralPath (Join-Path $codexHome "session_index.jsonl") -Value $codexIndexLines -Encoding UTF8
+    $codexNamedPayload = [ordered]@{
+        cwd = "C:\work\demo"
+        hook_event_name = "Stop"
+        last_assistant_message = "Done."
+        session_id = "codex-named-session"
+    } | ConvertTo-Json -Compress
+    $codexNamedResult = Invoke-NotifierDryRun $codexNamedPayload "TurnComplete"
+    Assert-ProcessSucceeded $codexNamedResult "Named Codex session should succeed."
+    $codexNamed = $codexNamedResult.Stdout | ConvertFrom-Json
+    Assert-Equal $codexNamed.session_name "Notifs" "Codex notifications should show the latest session name, not the session ID."
+
+    $unnamedCodexPayload = $codexNamedPayload -replace "codex-named-session", "codex-unnamed-session"
+    $unnamedCodexResult = Invoke-NotifierDryRun $unnamedCodexPayload "TurnComplete"
+    Assert-ProcessSucceeded $unnamedCodexResult "Unnamed Codex session should succeed."
+    $unnamedCodex = $unnamedCodexResult.Stdout | ConvertFrom-Json
+    Assert-Equal $unnamedCodex.session_name "codex-unnamed-session" "Codex sessions without a name should fall back to the session ID."
+
+    Set-Content -LiteralPath (Join-Path $claudeSessionDirectory "4242.json") -Encoding UTF8 -Value (
+        @{ pid = 4242; sessionId = "claude-named-session"; name = "tomas-c6"; nameSource = "derived" } | ConvertTo-Json -Compress
+    )
+    Set-Content -LiteralPath (Join-Path $claudeSessionDirectory "broken.json") -Encoding UTF8 -Value "not-json"
+    $claudeNamedPayload = $codexNamedPayload -replace "codex-named-session", "claude-named-session"
+    $claudeNamedResult = Invoke-NotifierDryRun $claudeNamedPayload "TurnComplete" "Claude"
+    Assert-ProcessSucceeded $claudeNamedResult "Named Claude session should succeed."
+    $claudeNamed = $claudeNamedResult.Stdout | ConvertFrom-Json
+    Assert-Equal $claudeNamed.session_name "tomas-c6" "Claude notifications should show the session name, not the session ID."
+
+    $unnamedClaudePayload = $codexNamedPayload -replace "codex-named-session", "claude-unknown-session"
+    $unnamedClaudeResult = Invoke-NotifierDryRun $unnamedClaudePayload "TurnComplete" "Claude"
+    Assert-ProcessSucceeded $unnamedClaudeResult "Unknown Claude session should succeed."
+    $unnamedClaude = $unnamedClaudeResult.Stdout | ConvertFrom-Json
+    Assert-Equal $unnamedClaude.session_name "claude-unknown-session" "Claude sessions without a name record should fall back to the session ID."
+
+    # The popup worker is detached, so the terminal-host ancestry has to be captured while the hook
+    # still has a walkable parent chain. In this test the notifier's parent is the test runner.
+    $chain = @($stop.host_process_chain)
+    Assert-True ($chain.Count -gt 0) "Hook payload should capture the originating process ancestry."
+    Assert-Equal $chain[0].pid $PID "The nearest captured ancestor should be the process that ran the hook."
+    Assert-True ($chain.Count -le 12) "Ancestry capture should stay within its depth limit."
+    Assert-True (@($chain | Where-Object { [int]$_.pid -le 0 }).Count -eq 0) "Every captured ancestor should have a real process ID."
+    Assert-True (@($chain | Where-Object { -not $_.name }).Count -eq 0) "Every captured ancestor should be named."
+    $boundaryNames = @("services.exe", "svchost.exe", "wininit.exe", "winlogon.exe", "sihost.exe", "explorer.exe", "csrss.exe")
+    $crossedBoundary = @($chain | Where-Object { $boundaryNames -contains ([string]$_.name).ToLowerInvariant() })
+    Assert-Equal $crossedBoundary.Count 0 "Ancestry capture should stop before session managers and the shell."
+    Assert-True (@($chain | Group-Object { $_.pid } | Where-Object { $_.Count -gt 1 }).Count -eq 0) "Ancestry capture should not repeat a process."
+    Assert-True (@($generic.host_process_chain).Count -gt 0) "Ancestry capture should also work outside WezTerm, where it is the only focus route."
+
+    . ([scriptblock]::Create((Get-NotifierFunctionSource "Get-WorkingDirectoryTitleSegments")))
+    $repositorySegments = @(Get-WorkingDirectoryTitleSegments "D:\Documents\beamng_driving_agent\src\agents")
+    Assert-Equal ($repositorySegments -join ",") "agents,src,beamng_driving_agent,Documents" "Title segments should run from the deepest folder outwards."
+    $profileSegments = @(Get-WorkingDirectoryTitleSegments (Join-Path $env:USERPROFILE "codex-wezterm-notify"))
+    Assert-Equal ($profileSegments -join ",") "codex-wezterm-notify" "Title segments should stop at the user profile instead of matching on 'Users'."
+    Assert-Equal @(Get-WorkingDirectoryTitleSegments $env:USERPROFILE).Count 0 "The profile directory itself yields no distinguishing segment."
+    Assert-Equal @(Get-WorkingDirectoryTitleSegments "D:\").Count 0 "A drive root yields no distinguishing segment."
+    Assert-Equal @(Get-WorkingDirectoryTitleSegments "").Count 0 "A missing working directory yields no segments."
+    $uncSegments = @(Get-WorkingDirectoryTitleSegments "\\server\share\repo\pkg")
+    Assert-Equal ($uncSegments -join ",") "pkg,repo" "UNC paths should stop at the share root."
+    Assert-True (@(Get-WorkingDirectoryTitleSegments "D:\a\b\c\d\e\f\g\h").Count -le 6) "Title segment search should stay bounded."
+
     $hooks = Get-Content -Raw -LiteralPath $hooksPath | ConvertFrom-Json
     Assert-Equal $hooks.hooks.Stop.Count 1 "One Stop hook should be declared."
     Assert-Equal $hooks.hooks.PermissionRequest.Count 1 "One PermissionRequest hook should be declared."
     $hookText = Get-Content -Raw -LiteralPath $hooksPath
     Assert-True ($hookText -match '\$\{PLUGIN_ROOT\}') "Hook commands should resolve scripts through PLUGIN_ROOT."
 
-    $forbiddenInternals = Select-String -LiteralPath $notifier -Pattern "state_5\.sqlite|session_index\.jsonl|transcript_path|internal_chat_message_metadata_passthrough|last-assistant-message"
+    # session_index.jsonl is the only local record of a Codex session name, so the notifier
+    # reads it (read-only, best-effort) to label notifications. Everything else stays off limits.
+    $forbiddenInternals = Select-String -LiteralPath $notifier -Pattern "state_5\.sqlite|\.sqlite|transcript_path|internal_chat_message_metadata_passthrough|last-assistant-message"
     Assert-Equal @($forbiddenInternals).Count 0 "Notifier should not depend on internal Codex persistence formats."
 
     $geometryChangingActivation = Select-String -LiteralPath $notifier -Pattern "ShowWindowAsync\(window,\s*9\)|SwitchToThisWindow\(window"
@@ -208,6 +304,8 @@ try {
 
     Write-Output "All tests passed."
 } finally {
+    $env:CODEX_HOME = $null
+    $env:CLAUDE_CONFIG_DIR = $null
     Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
 
