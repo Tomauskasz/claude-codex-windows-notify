@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("TurnComplete", "ApprovalRequested", "AttentionRequested", "BackgroundComplete", "TurnFailed")]
     [string]$Event = "TurnComplete",
 
@@ -198,7 +198,7 @@ function Get-HostProcessChain {
     param([int]$MaximumDepth = 12)
 
     $processes = @{}
-    foreach ($row in [CodexProcessTree]::Snapshot()) {
+    foreach ($row in [NotifyProcessTree]::Snapshot()) {
         $fields = $row.Split([char]"|", 3)
         if ($fields.Count -lt 3) {
             continue
@@ -223,7 +223,7 @@ function Get-HostProcessChain {
         param([int]$ProcessId)
 
         if (-not $creationTimes.ContainsKey($ProcessId)) {
-            $creationTimes[$ProcessId] = [CodexProcessTree]::GetCreationTime($ProcessId)
+            $creationTimes[$ProcessId] = [NotifyProcessTree]::GetCreationTime($ProcessId)
         }
         return $creationTimes[$ProcessId]
     }
@@ -402,7 +402,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 
-public static class CodexDetachedProcess
+public static class NotifyDetachedProcess
 {
 private const uint CREATE_NO_WINDOW = 0x08000000;
 
@@ -481,7 +481,7 @@ public static void Start(string executable, string arguments)
 }
 }
 
-public static class CodexProcessTree
+public static class NotifyProcessTree
 {
 private const uint TH32CS_SNAPPROCESS = 0x00000002;
 private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
@@ -613,7 +613,7 @@ public static long GetCreationTime(int processId)
     $arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
         $PSCommandPath + '" -Worker -DataBase64 ' + $encodedData
 
-    [CodexDetachedProcess]::Start((Join-Path $PSHOME "powershell.exe"), $arguments)
+    [NotifyDetachedProcess]::Start((Join-Path $PSHOME "powershell.exe"), $arguments)
     return
 }
 
@@ -626,7 +626,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 
-public sealed class CodexPopupForm : Form
+public sealed class NotifyPopupForm : Form
 {
     protected override CreateParams CreateParams
     {
@@ -642,7 +642,7 @@ public sealed class CodexPopupForm : Form
     }
 }
 
-public static class CodexWindowFocus
+public static class NotifyWindowFocus
 {
     [DllImport("user32.dll")]
     public static extern bool SetProcessDpiAwarenessContext(IntPtr context);
@@ -683,6 +683,9 @@ public static class CodexWindowFocus
     private static extern int GetWindowText(IntPtr window, StringBuilder text, int maximum);
 
     [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr window);
+
+    [DllImport("user32.dll")]
     private static extern IntPtr GetWindow(IntPtr window, uint command);
 
     [DllImport("user32.dll")]
@@ -691,6 +694,7 @@ public static class CodexWindowFocus
     private const uint GW_OWNER = 4;
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
+    private const int SW_RESTORE = 9;
 
     public static IntPtr[] GetProcessWindows(uint processId)
     {
@@ -747,6 +751,20 @@ public static class CodexWindowFocus
         return title.ToString();
     }
 
+    // A minimized window cannot be raised by activation alone: Windows reports the activation as
+    // successful while the window stays in the taskbar, so the click appears to do nothing.
+    // Restoring is the only way to show it, and is applied ONLY when the window is minimized. A
+    // window that is already on screen is never touched, so a normal, maximized, or snapped window
+    // keeps its exact geometry. A minimized window has no on-screen geometry to preserve, and
+    // Windows returns it to the placement it had before it was minimized.
+    private static void RestoreIfMinimized(IntPtr window)
+    {
+        if (IsIconic(window))
+        {
+            ShowWindowAsync(window, SW_RESTORE);
+        }
+    }
+
     public static bool ActivateWindow(IntPtr window)
     {
         if (window == IntPtr.Zero)
@@ -754,6 +772,7 @@ public static class CodexWindowFocus
             return false;
         }
 
+        RestoreIfMinimized(window);
         IntPtr foregroundWindow = GetForegroundWindow();
         uint ignoredProcessId;
         uint foregroundThread = GetWindowThreadProcessId(foregroundWindow, out ignoredProcessId);
@@ -788,7 +807,7 @@ public static class CodexWindowFocus
 
 '@
 
-[CodexWindowFocus]::SetProcessDpiAwarenessContext([IntPtr](-4)) | Out-Null
+[NotifyWindowFocus]::SetProcessDpiAwarenessContext([IntPtr](-4)) | Out-Null
 
 $Event = [string]$notificationData.event
 $title = [string]$notificationData.title
@@ -849,14 +868,14 @@ function Get-OriginatingWindowHandle {
         [uint32]$_.pid
     } | Sort-Object -Unique)
     $windowHandles = @($candidateProcessIds | ForEach-Object {
-        [CodexWindowFocus]::GetProcessWindows($_)
+        [NotifyWindowFocus]::GetProcessWindows($_)
     })
     if ($windowHandles.Count -eq 0) {
         return [IntPtr]::Zero
     }
 
     $exactMatches = @($windowHandles | Where-Object {
-        [CodexWindowFocus]::GetWindowTitle($_) -eq [string]$sourcePane.window_title
+        [NotifyWindowFocus]::GetWindowTitle($_) -eq [string]$sourcePane.window_title
     })
     if ($exactMatches.Count -eq 1) {
         return [IntPtr]$exactMatches[0]
@@ -864,7 +883,7 @@ function Get-OriginatingWindowHandle {
 
     $stableSourceTitle = Get-StableWindowTitle ([string]$sourcePane.window_title)
     $stableMatches = @($windowHandles | Where-Object {
-        (Get-StableWindowTitle ([CodexWindowFocus]::GetWindowTitle($_))) -eq $stableSourceTitle
+        (Get-StableWindowTitle ([NotifyWindowFocus]::GetWindowTitle($_))) -eq $stableSourceTitle
     })
     if ($stableMatches.Count -eq 1) {
         return [IntPtr]$stableMatches[0]
@@ -926,7 +945,7 @@ function Select-HostWindowByWorkingDirectory {
 
     foreach ($segment in @(Get-WorkingDirectoryTitleSegments $workingDirectory)) {
         $titleMatches = @($Windows | Where-Object {
-            [CodexWindowFocus]::GetWindowTitle($_).IndexOf($segment, [StringComparison]::OrdinalIgnoreCase) -ge 0
+            [NotifyWindowFocus]::GetWindowTitle($_).IndexOf($segment, [StringComparison]::OrdinalIgnoreCase) -ge 0
         })
         if ($titleMatches.Count -eq 1) {
             return [IntPtr]$titleMatches[0]
@@ -945,7 +964,7 @@ function Get-HostWindowHandle {
             continue
         }
 
-        $windows = @([CodexWindowFocus]::GetAppWindows([uint32]$processId))
+        $windows = @([NotifyWindowFocus]::GetAppWindows([uint32]$processId))
         if ($windows.Count -eq 0) {
             continue
         }
@@ -969,7 +988,7 @@ function Show-OriginatingHostWindow {
     if ($windowHandle -eq [IntPtr]::Zero) {
         throw "The window of the app hosting this session could not be identified unambiguously."
     }
-    if (-not [CodexWindowFocus]::ActivateWindow($windowHandle)) {
+    if (-not [NotifyWindowFocus]::ActivateWindow($windowHandle)) {
         throw "Windows refused to focus the app hosting this session."
     }
 }
@@ -988,12 +1007,12 @@ function Show-OriginatingPane {
     if ($windowHandle -eq [IntPtr]::Zero) {
         throw "The WezTerm window for pane $sourcePaneId could not be identified unambiguously."
     }
-    if (-not [CodexWindowFocus]::ActivateWindow($windowHandle)) {
+    if (-not [NotifyWindowFocus]::ActivateWindow($windowHandle)) {
         throw "Windows refused to focus the WezTerm window for pane $sourcePaneId."
     }
 }
 
-$form = New-Object CodexPopupForm
+$form = New-Object NotifyPopupForm
 $form.Text = $title
 $form.AccessibleName = $title
 $form.AccessibleDescription = $message
@@ -1172,6 +1191,6 @@ $timer.Start()
 $player = New-Object System.Media.SoundPlayer $soundPath
 $player.Play()
 $form.Show()
-[CodexWindowFocus]::ShowWindowAsync($form.Handle, 4) | Out-Null
+[NotifyWindowFocus]::ShowWindowAsync($form.Handle, 4) | Out-Null
 $form.Add_FormClosed({ [Windows.Forms.Application]::ExitThread() })
 [Windows.Forms.Application]::Run()

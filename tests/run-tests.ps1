@@ -300,8 +300,24 @@ try {
     $forbiddenInternals = Select-String -LiteralPath $notifier -Pattern "state_5\.sqlite|\.sqlite|transcript_path|internal_chat_message_metadata_passthrough|last-assistant-message"
     Assert-Equal @($forbiddenInternals).Count 0 "Notifier should not depend on internal Codex persistence formats."
 
-    $geometryChangingActivation = Select-String -LiteralPath $notifier -Pattern "ShowWindowAsync\(window,\s*9\)|SwitchToThisWindow\(window"
-    Assert-Equal @($geometryChangingActivation).Count 0 "Notification clicks must focus WezTerm without restoring, resizing, or unsnapping its window."
+    # Activation must never change the geometry of a window that is already on screen.
+    # SwitchToThisWindow is undocumented and raises and restores unconditionally, so it stays banned
+    # outright. A restore is allowed only for a minimized window, which has no on-screen geometry to
+    # preserve, and only from the single helper that guards on IsIconic.
+    $notifierText = Get-Content -Raw -LiteralPath $notifier
+    Assert-Equal ([regex]::Matches($notifierText, "SwitchToThisWindow").Count) 0 "Activation must not use SwitchToThisWindow, which raises and restores unconditionally."
+
+    $restoreCalls = [regex]::Matches($notifierText, "ShowWindowAsync\(\s*window\s*,\s*(9|SW_RESTORE)\s*\)")
+    Assert-Equal $restoreCalls.Count 1 "Exactly one restore call should exist, inside the minimized-only helper."
+
+    $helperIndex = $notifierText.IndexOf("private static void RestoreIfMinimized(IntPtr window)")
+    $activateIndex = $notifierText.IndexOf("public static bool ActivateWindow(IntPtr window)")
+    Assert-True ($helperIndex -ge 0) "The minimized-only restore helper should exist."
+    Assert-True ($activateIndex -gt $helperIndex) "ActivateWindow should follow the helper it calls."
+    $helperRegion = $notifierText.Substring($helperIndex, $activateIndex - $helperIndex)
+    Assert-True ($helperRegion.Contains("IsIconic(window)")) "The restore should be reached only through a minimized check."
+    Assert-True ($restoreCalls[0].Index -ge $helperIndex -and $restoreCalls[0].Index -lt $activateIndex) "The only restore should sit inside the minimized-only helper."
+    Assert-True ($notifierText.Substring($activateIndex).Contains("RestoreIfMinimized(window);")) "ActivateWindow should restore a minimized window before trying to focus it."
 
     $showWithoutActivationDeclaration = Select-String -LiteralPath $notifier -Pattern "public static extern bool ShowWindowAsync\(IntPtr window, int command\);"
     Assert-Equal @($showWithoutActivationDeclaration).Count 1 "The popup must retain the ShowWindowAsync declaration used to display without stealing focus."
