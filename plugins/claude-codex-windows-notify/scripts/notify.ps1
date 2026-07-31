@@ -708,25 +708,9 @@ public static class NotifyWindowFocus
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int SW_RESTORE = 9;
 
-    public static IntPtr[] GetProcessWindows(uint processId)
-    {
-        List<IntPtr> windows = new List<IntPtr>();
-        EnumWindows(delegate(IntPtr window, IntPtr parameter)
-        {
-            uint ownerProcessId;
-            GetWindowThreadProcessId(window, out ownerProcessId);
-            if (ownerProcessId == processId && IsWindowVisible(window))
-            {
-                windows.Add(window);
-            }
-            return true;
-        }, IntPtr.Zero);
-        return windows.ToArray();
-    }
-
     // Windows a user can actually switch to: visible, unowned, not a tool window, and titled.
-    // Electron hosts such as VS Code and Cursor own several hidden and untitled helper windows
-    // that would otherwise make every multi-window instance look ambiguous.
+    // GUI hosts can own hidden, untitled, tool, or owned helper windows that would otherwise make
+    // one real application window look ambiguous.
     public static IntPtr[] GetAppWindows(uint processId)
     {
         List<IntPtr> windows = new List<IntPtr>();
@@ -881,7 +865,7 @@ function Get-OriginatingWindowHandle {
         [uint32]$_.pid
     } | Sort-Object -Unique)
     $windowHandles = @($candidateProcessIds | ForEach-Object {
-        [NotifyWindowFocus]::GetProcessWindows($_)
+        [NotifyWindowFocus]::GetAppWindows($_)
     })
     if ($windowHandles.Count -eq 0) {
         return [IntPtr]::Zero

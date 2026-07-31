@@ -303,6 +303,60 @@ try {
     . ([scriptblock]::Create((Get-NotifierFunctionSource "Select-HostWindowByWorkingDirectory")))
     . ([scriptblock]::Create((Get-NotifierFunctionSource "Resolve-HostWindowByProcessIds")))
     . ([scriptblock]::Create((Get-NotifierFunctionSource "Get-HostWindowHandle")))
+    . ([scriptblock]::Create((Get-NotifierFunctionSource "Get-StableWindowTitle")))
+    . ([scriptblock]::Create((Get-NotifierFunctionSource "Get-OriginatingWindowHandle")))
+
+    $weztermMainWindow = $null
+    $weztermHelperWindow = $null
+    try {
+        $weztermMainWindow = New-Object Windows.Forms.Form
+        $weztermMainWindow.Text = "current-wezterm-title"
+        $weztermMainWindow.Show()
+        $weztermHelperWindow = New-Object Windows.Forms.Form
+        $weztermHelperWindow.Text = "wezterm-helper"
+        $weztermHelperWindow.Owner = $weztermMainWindow
+        $weztermHelperWindow.Show()
+        [Windows.Forms.Application]::DoEvents()
+
+        function script:Invoke-TestWezTerm {
+            param($Command, $Subcommand, $FormatFlag, $Format)
+            if ($Command -ne "cli" -or $FormatFlag -ne "--format" -or $Format -ne "json") {
+                throw "Unexpected test WezTerm arguments."
+            }
+            if ($Subcommand -eq "list") {
+                return (@{
+                    pane_id = 42
+                    workspace = "default"
+                    window_title = "stale-pane-title"
+                } | ConvertTo-Json -Compress)
+            }
+            if ($Subcommand -eq "list-clients") {
+                return (@{
+                    focused_pane_id = 42
+                    workspace = "default"
+                    pid = $PID
+                } | ConvertTo-Json -Compress)
+            }
+            throw "Unexpected test WezTerm command '$Subcommand'."
+        }
+
+        $script:terminalIntegration = "wezterm"
+        $script:sourcePaneId = "42"
+        $script:weztermCli = "Invoke-TestWezTerm"
+        Assert-Equal (Get-OriginatingWindowHandle) $weztermMainWindow.Handle (
+            "A visible owned helper must not make one WezTerm app window ambiguous."
+        )
+    } finally {
+        if ($weztermHelperWindow) {
+            $weztermHelperWindow.Close()
+            $weztermHelperWindow.Dispose()
+        }
+        if ($weztermMainWindow) {
+            $weztermMainWindow.Close()
+            $weztermMainWindow.Dispose()
+        }
+        Remove-Item Function:\Invoke-TestWezTerm -ErrorAction SilentlyContinue
+    }
 
     $detachedHost = $null
     $workspaceWindow = $null
