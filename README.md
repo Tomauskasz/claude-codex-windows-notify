@@ -62,21 +62,6 @@ Claude Code has no plugin hook mechanism, so it is configured through `%USERPROF
 - `Notification` for elicitation dialogs and background agents
 - `StopFailure` for API errors such as rate limits
 
-## Migrating from `codex-wezterm-notify`
-
-The project was renamed once WezTerm stopped being the only terminal it could return you to. GitHub redirects the old repository URL, but the Codex plugin ID changed, so an existing install must be replaced:
-
-```powershell
-codex plugin remove codex-wezterm-notify@codex-wezterm-notify
-codex plugin marketplace remove codex-wezterm-notify
-codex plugin marketplace add Tomauskasz/claude-codex-windows-notify
-codex plugin add claude-codex-windows-notify@claude-codex-windows-notify
-```
-
-You will be asked to trust the hooks again, because trust is recorded per plugin ID.
-
-For Claude Code, update the four `notify.ps1` paths in `settings.json` to the renamed `plugins\claude-codex-windows-notify` directory.
-
 ## Update
 
 Codex:
