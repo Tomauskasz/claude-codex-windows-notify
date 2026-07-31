@@ -6,6 +6,8 @@ $notifier = Join-Path $root "plugins\claude-codex-windows-notify\scripts\notify.
 $hooksPath = Join-Path $root "plugins\claude-codex-windows-notify\hooks\hooks.json"
 $fixtureDirectory = Join-Path $PSScriptRoot "fixtures"
 $temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) ("claude-codex-windows-notify-tests-" + [guid]::NewGuid())
+$originalTermProgram = $env:TERM_PROGRAM
+$originalVsCodeInjection = $env:VSCODE_INJECTION
 
 function Assert-Equal {
     param($Actual, $Expected, [string]$Message)
@@ -37,6 +39,18 @@ function Get-NotifierFunctionSource {
         throw "Notifier does not define a function named '$Name'."
     }
     return $definition.Extent.Text
+}
+
+function Get-NotifierFocusTypeSource {
+    $notifierText = Get-Content -Raw -LiteralPath $notifier
+    $match = [regex]::Match(
+        $notifierText,
+        "(?s)Add-Type -ReferencedAssemblies `"System\.Windows\.Forms\.dll`".*?-TypeDefinition @'\r?\n(?<source>.*?)\r?\n'@"
+    )
+    if (-not $match.Success) {
+        throw "Notifier does not define the window-focus types."
+    }
+    return $match.Groups["source"].Value
 }
 
 function Assert-ProcessSucceeded {
@@ -92,6 +106,8 @@ try {
     $env:WEZTERM_EXECUTABLE_DIR = $temporaryDirectory
     $env:WEZTERM_PANE = "42"
     $env:WEZTERM_UNIX_SOCKET = "test-socket"
+    $env:TERM_PROGRAM = "vscode"
+    $env:VSCODE_INJECTION = "1"
 
     $codexHome = Join-Path $temporaryDirectory "codex-home"
     $claudeSessionDirectory = Join-Path $temporaryDirectory "claude-home\sessions"
@@ -110,6 +126,7 @@ try {
     Assert-Equal $stop.message "All checks passed." "Supported last_assistant_message should drive the preview."
     Assert-Equal $stop.terminal_integration "wezterm" "WezTerm sessions should enable exact-pane integration."
     Assert-Equal $stop.source_pane_id "42" "Originating WezTerm pane should be captured."
+    Assert-Equal $stop.host_process_family_hint "vscode" "The VS Code host family hint should be captured."
 
     $permissionPayload = Get-Content -Raw -LiteralPath (Join-Path $fixtureDirectory "permission-request.json")
     $permissionResult = Invoke-NotifierDryRun $permissionPayload "ApprovalRequested"
@@ -277,7 +294,72 @@ try {
     Assert-True (@($chain | Group-Object { $_.pid } | Where-Object { $_.Count -gt 1 }).Count -eq 0) "Ancestry capture should not repeat a process."
     Assert-True (@($generic.host_process_chain).Count -gt 0) "Ancestry capture should also work outside WezTerm, where it is the only focus route."
 
+    Add-Type -AssemblyName System.Drawing
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -ReferencedAssemblies "System.Windows.Forms.dll" -IgnoreWarnings -WarningAction SilentlyContinue -TypeDefinition (
+        Get-NotifierFocusTypeSource
+    )
     . ([scriptblock]::Create((Get-NotifierFunctionSource "Get-WorkingDirectoryTitleSegments")))
+    . ([scriptblock]::Create((Get-NotifierFunctionSource "Select-HostWindowByWorkingDirectory")))
+    . ([scriptblock]::Create((Get-NotifierFunctionSource "Resolve-HostWindowByProcessIds")))
+    . ([scriptblock]::Create((Get-NotifierFunctionSource "Get-HostWindowHandle")))
+
+    $detachedHost = $null
+    $workspaceWindow = $null
+    $duplicateWorkspaceWindow = $null
+    try {
+        $detachedHost = Start-Process -FilePath (Join-Path $PSHOME "powershell.exe") -ArgumentList @(
+            "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30"
+        ) -WindowStyle Hidden -PassThru
+        $workspaceName = "notify-test-" + [guid]::NewGuid().ToString("N")
+        $script:workingDirectory = Join-Path "C:\work" $workspaceName
+        $script:hostProcessChain = @([pscustomobject]@{ pid = $detachedHost.Id; name = "powershell.exe" })
+        $script:hostProcessFamilyHint = "vscode"
+        $workspaceWindow = New-Object Windows.Forms.Form
+        $workspaceWindow.Text = "$workspaceName - Visual Studio Code"
+        $workspaceWindow.Show()
+        [Windows.Forms.Application]::DoEvents()
+        function script:Get-Process {
+            param($Name, $ErrorAction)
+            return [pscustomobject]@{ Id = $PID }
+        }
+
+        $resolvedHost = Get-HostWindowHandle
+        Assert-Equal $resolvedHost $workspaceWindow.Handle (
+            "A detached session with windowless ancestry should resolve a unique workspace window."
+        )
+
+        $duplicateWorkspaceWindow = New-Object Windows.Forms.Form
+        $duplicateWorkspaceWindow.Text = "$workspaceName - Cursor"
+        $duplicateWorkspaceWindow.Show()
+        [Windows.Forms.Application]::DoEvents()
+        Assert-Equal (Get-HostWindowHandle) ([IntPtr]::Zero) (
+            "A detached session should not guess when multiple workspace windows match."
+        )
+
+        $duplicateWorkspaceWindow.Close()
+        $duplicateWorkspaceWindow.Dispose()
+        $duplicateWorkspaceWindow = $null
+
+        $script:hostProcessFamilyHint = ""
+        Assert-Equal (Get-HostWindowHandle) ([IntPtr]::Zero) (
+            "A detached session without a host identity hint should not search unrelated app windows."
+        )
+    } finally {
+        if ($duplicateWorkspaceWindow) {
+            $duplicateWorkspaceWindow.Close()
+            $duplicateWorkspaceWindow.Dispose()
+        }
+        if ($workspaceWindow) {
+            $workspaceWindow.Close()
+            $workspaceWindow.Dispose()
+        }
+        if ($detachedHost -and -not $detachedHost.HasExited) {
+            Stop-Process -Id $detachedHost.Id -Force
+        }
+        Remove-Item Function:\Get-Process -ErrorAction SilentlyContinue
+    }
+
     $repositorySegments = @(Get-WorkingDirectoryTitleSegments "D:\Documents\beamng_driving_agent\src\agents")
     Assert-Equal ($repositorySegments -join ",") "agents,src,beamng_driving_agent,Documents" "Title segments should run from the deepest folder outwards."
     $profileSegments = @(Get-WorkingDirectoryTitleSegments (Join-Path $env:USERPROFILE "claude-codex-windows-notify"))
@@ -326,6 +408,8 @@ try {
 } finally {
     $env:CODEX_HOME = $null
     $env:CLAUDE_CONFIG_DIR = $null
+    $env:TERM_PROGRAM = $originalTermProgram
+    $env:VSCODE_INJECTION = $originalVsCodeInjection
     Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
 

@@ -283,6 +283,16 @@ function Resolve-WezTermExecutable {
     throw "wezterm.exe was not found. Run $ProductName inside native Windows WezTerm."
 }
 
+function Get-HostProcessFamilyHint {
+    if (
+        [string]$env:TERM_PROGRAM -eq "vscode" -or
+        [string]$env:VSCODE_INJECTION -eq "1"
+    ) {
+        return "vscode"
+    }
+    return ""
+}
+
 function New-NotificationData {
     param(
         $HookData,
@@ -306,6 +316,7 @@ function New-NotificationData {
     $terminalIntegration = if ([string]::IsNullOrWhiteSpace($sourcePaneId)) { "none" } else { "wezterm" }
     $weztermExecutable = if ($terminalIntegration -eq "wezterm") { Resolve-WezTermExecutable } else { "" }
     $weztermSocket = if ($terminalIntegration -eq "wezterm") { [string]$env:WEZTERM_UNIX_SOCKET } else { "" }
+    $hostProcessFamilyHint = Get-HostProcessFamilyHint
 
     switch ($NotificationEvent) {
         "ApprovalRequested" {
@@ -370,6 +381,7 @@ function New-NotificationData {
         source_pane_id       = $sourcePaneId
         wezterm_executable   = $weztermExecutable
         wezterm_socket       = $weztermSocket
+        host_process_family_hint = $hostProcessFamilyHint
         host_process_chain   = @(Get-HostProcessChain)
     }
 }
@@ -818,6 +830,7 @@ $workingDirectory = [string]$notificationData.working_directory
 $terminalIntegration = [string]$notificationData.terminal_integration
 $sourcePaneId = [string]$notificationData.source_pane_id
 $weztermCli = [string]$notificationData.wezterm_executable
+$hostProcessFamilyHint = [string]$notificationData.host_process_family_hint
 $hostProcessChain = @()
 if ($notificationData.host_process_chain) {
     $hostProcessChain = @($notificationData.host_process_chain)
@@ -954,9 +967,22 @@ function Select-HostWindowByWorkingDirectory {
     return [IntPtr]::Zero
 }
 
-# Resolves the window of the app hosting this session: the nearest captured ancestor that owns a
-# switchable window. Terminals inside VS Code and Cursor hang off a windowless pty-host process,
-# so the first ancestor with a window is the editor itself.
+function Resolve-HostWindowByProcessIds {
+    param($ProcessIds)
+
+    $windows = @($ProcessIds | Sort-Object -Unique | ForEach-Object {
+        [NotifyWindowFocus]::GetAppWindows([uint32]$_)
+    })
+    $windows = @($windows | Sort-Object -Unique)
+    return [pscustomobject]@{
+        has_windows = $windows.Count -gt 0
+        handle      = Select-HostWindowByWorkingDirectory $windows
+    }
+}
+
+# Prefer normal process ancestry. Detached background sessions can retain their VS Code family
+# identity after their ancestry loses the editor, so use that broader hint only when no ancestor
+# owns a switchable window.
 function Get-HostWindowHandle {
     foreach ($entry in $hostProcessChain) {
         $processId = 0
@@ -975,6 +1001,15 @@ function Get-HostWindowHandle {
         # One editor instance shares a single pty host across all of its windows, so ancestry
         # cannot say which window holds this terminal. Fall back to the workspace name.
         return (Select-HostWindowByWorkingDirectory $windows)
+    }
+
+    if ($hostProcessFamilyHint -eq "vscode") {
+        $hintedProcessIds = @(Get-Process -Name @("Code", "Code - Insiders", "Cursor", "VSCodium") `
+            -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+        $hintedResult = Resolve-HostWindowByProcessIds $hintedProcessIds
+        if ($hintedResult.has_windows) {
+            return [IntPtr]$hintedResult.handle
+        }
     }
     return [IntPtr]::Zero
 }
