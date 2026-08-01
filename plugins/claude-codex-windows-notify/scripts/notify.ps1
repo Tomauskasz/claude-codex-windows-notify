@@ -2,7 +2,7 @@
     [ValidateSet("TurnComplete", "ApprovalRequested", "AttentionRequested", "BackgroundComplete", "TurnFailed")]
     [string]$Event = "TurnComplete",
 
-    [ValidateSet("Codex", "Claude")]
+    [ValidateSet("Codex", "Claude", "OpenCode")]
     [string]$ProductName = "Codex",
 
     [switch]$Worker,

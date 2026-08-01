@@ -65,113 +65,26 @@ Claude Code has no plugin hook mechanism, so it is configured through `%USERPROF
 
 ### OpenCode
 
-OpenCode uses a plugin system. Create `%USERPROFILE%\.config\opencode\plugins\notification.js` with the following content:
+OpenCode uses a plugin system. Copy the bundled plugin directory:
 
-```javascript
-import { spawn } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
-
-export const NotificationPlugin = async ({ project, client, $, directory, worktree }) => {
-  const notifyScript = 'C:\\Users\\[USERNAME]\\.codex\\plugins\\cache\\claude-codex-windows-notify\\claude-codex-windows-notify\\0.5.2\\scripts\\notify.ps1';
-  
-  return {
-    event: async ({ event }) => {
-      try {
-        let notificationEvent = null;
-        let hookData = null;
-
-        // Use the project directory name as a fallback session name
-        const cwd = directory || project || process.cwd();
-        const projectName = path.basename(cwd);
-        const sessionId = event.properties?.info?.name || event.properties?.info?.id || projectName;
-
-        switch (event.type) {
-          case 'session.idle':
-            notificationEvent = 'TurnComplete';
-            hookData = {
-              hook_event_name: 'Stop',
-              session_id: sessionId,
-              cwd: cwd,
-              last_assistant_message: event.properties?.lastMessage || 'OpenCode session finished.'
-            };
-            break;
-          case 'permission.requested':
-            notificationEvent = 'ApprovalRequested';
-            hookData = {
-              hook_event_name: 'PermissionRequest',
-              session_id: sessionId,
-              cwd: cwd,
-              tool_name: event.properties?.tool || 'Unknown',
-              tool_input: event.properties?.input || {}
-            };
-            break;
-          case 'session.error':
-            notificationEvent = 'TurnFailed';
-            hookData = {
-              hook_event_name: 'StopFailure',
-              session_id: sessionId,
-              cwd: cwd,
-              error: event.properties?.error || 'Unknown error',
-              last_assistant_message: event.properties?.message || ''
-            };
-            break;
-          default:
-            return;
-        }
-
-        if (notificationEvent && hookData) {
-          const hookDataJson = JSON.stringify(hookData);
-          const tempFile = path.join(os.tmpdir(), `notify-${Date.now()}.json`);
-          fs.writeFileSync(tempFile, hookDataJson);
-          
-          const fd = fs.openSync(tempFile, 'r');
-          const ps = spawn('powershell.exe', [
-            '-NoLogo',
-            '-NoProfile',
-            '-NonInteractive',
-            '-ExecutionPolicy', 'Bypass',
-            '-File', notifyScript,
-            '-Event', notificationEvent,
-            '-ProductName', 'OpenCode'
-          ], {
-            stdio: [fd, 'ignore', 'ignore'],
-            windowsHide: true
-          });
-
-          ps.unref();
-          
-          setTimeout(() => {
-            try {
-              fs.closeSync(fd);
-              fs.unlinkSync(tempFile);
-            } catch (e) {}
-          }, 5000);
-        }
-      } catch (error) {
-        console.error('Notification plugin error:', error.message);
-      }
-    }
-  };
-};
+```powershell
+Copy-Item -Recurse .\plugins\claude-codex-windows-notify `
+  "$env:USERPROFILE\.config\opencode\plugins\claude-codex-windows-notify"
 ```
 
-Replace `[USERNAME]` with your Windows username. Then add the plugin to `%USERPROFILE%\.config\opencode\opencode.json`:
+The plugin emits one completion notification for `session.idle`. It ignores `session.error`: OpenCode emits this event for non-fatal internal errors. It also deduplicates repeated idle events for the same session over ten seconds.
+
+Add the plugin to `%USERPROFILE%\.config\opencode\opencode.json`:
 
 ```json
 {
   "plugin": [
-    "C:\\Users\\[USERNAME]\\.config\\opencode\\plugins\\notification.js"
+    "C:\\Users\\[USERNAME]\\.config\\opencode\\plugins\\claude-codex-windows-notify\\notification.js"
   ]
 }
 ```
 
-The plugin registers:
-
-- `session.idle` for completed turns
-- `permission.requested` for approval prompts
-- `session.error` for failures
+Restart OpenCode. The plugin registers `session.idle` for completed turns.
 
 ## Update
 
