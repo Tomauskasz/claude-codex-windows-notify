@@ -1,7 +1,7 @@
 {
   "name": "claude-codex-windows-notify",
   "interface": {
-    "displayName": "Claude/Codex Windows Notify"
+    "displayName": "Windows Notifications for Claude, Codex & OpenCode"
   },
   "plugins": [
     {

@@ -1,10 +1,30 @@
-# Claude/Codex/OpenCode Windows Notify
+# Windows Notifications for Claude, Codex & OpenCode
 
-Native Windows notifications for Codex, Claude Code, and OpenCode, with exact-pane return for WezTerm.
+Native Windows notifications for [Claude Code](https://code.claude.com/), [Codex CLI](https://github.com/openai/codex), and [OpenCode](https://opencode.ai/), with exact-pane return for WezTerm.
 
 When any agent finishes a turn or needs approval, you get a compact popup with sound, the session name and working directory, and a response preview. Clicking it returns you to the session that produced it: the exact pane in WezTerm, or the window of the app hosting the terminal everywhere else, including an integrated terminal inside VS Code or Cursor.
 
 All three agents are first-class. One renderer serves all, and each is wired through its own native hook mechanism: a plugin for Codex, the settings file for Claude Code, and a plugin for OpenCode.
+
+## Screenshots
+
+### Completion
+
+![Codex completion popup](docs/screenshots/codex-complete.png)
+
+Claude Code and OpenCode completion popups use the same renderer.
+
+### Approval
+
+![Claude approval popup](docs/screenshots/claude-approval.png)
+
+Codex and OpenCode approval popups use the same renderer.
+
+### Failure
+
+![Codex failure popup](docs/screenshots/codex-failure.png)
+
+Three agents, one popup. Each carries the session name, working directory, and a preview of the response or error.
 
 ## Features
 
