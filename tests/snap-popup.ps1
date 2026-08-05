@@ -134,19 +134,19 @@ if ($script:bestHandle -eq [IntPtr]::Zero) {
 }
 
 $winRect = $script:bestWindowRect
-$clientRect = $script:bestClientSize
-$origin = $script:bestClientOrigin
 $ww = $winRect.Right - $winRect.Left
 $wh = $winRect.Bottom - $winRect.Top
-$cw = $clientRect.Right - $clientRect.Left
-$ch = $clientRect.Bottom - $clientRect.Top
-$scaleX = if ($cw -gt 0) { [double]$ww / [double]$cw } else { 1.0 }
-$scaleY = if ($ch -gt 0) { [double]$wh / [double]$ch } else { 1.0 }
-$width = [int]([Math]::Round($cw * $scaleX))
-$height = [int]([Math]::Round($ch * $scaleY))
-$left = $winRect.Left
-$top = $winRect.Top
-Write-Host "Capturing $width x $height at $left,$top (scale=$scaleX,$scaleY)"
+
+# The form is constructed with cardWidth = 720 (logical). On high-DPI / virtualized displays,
+# GetWindowRect returns physical pixels (e.g. 576x115 for a 720x144 logical form).
+# PrintWindow renders the unscaled 720px logical surface, so the bitmap must be 720px wide
+# to prevent right and bottom edge clipping.
+$targetWidth = 720
+$scale = if ($ww -gt 0 -and $ww -lt $targetWidth) { [double]$targetWidth / [double]$ww } else { 1.0 }
+
+$width = [int]([Math]::Round($ww * $scale))
+$height = [int]([Math]::Round($wh * $scale))
+Write-Host "Capturing $width x $height (scale=$scale, raw=$ww x $wh)"
 $bmp = New-Object System.Drawing.Bitmap $width, $height
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $hdc = $g.GetHdc()
