@@ -8,20 +8,7 @@ const completedAt = new Map();
 const sessionTitles = new Map();
 const childSessions = new Set();
 const pluginRoot = path.dirname(fileURLToPath(import.meta.url));
-const notifyCandidates = [
-  path.join(pluginRoot, 'scripts', 'notify.ps1'),
-  path.join(
-    os.homedir(),
-    '.codex',
-    'plugins',
-    'cache',
-    'claude-codex-windows-notify',
-    'claude-codex-windows-notify',
-    '0.5.2',
-    'scripts',
-    'notify.ps1'
-  ),
-];
+const notifyCandidates = [path.join(pluginRoot, 'scripts', 'notify.ps1')];
 
 function resolveNotifyScript() {
   for (const candidate of notifyCandidates) {
@@ -84,7 +71,7 @@ export const NotificationPlugin = async () => {
         }
 
         if (event.type !== 'session.idle') return;
-        if (childSessions.has(sessionId)) return;
+        if (info?.parentID || childSessions.has(sessionId)) return;
 
         const now = Date.now();
         if (now - (completedAt.get(sessionId) || 0) < 10_000) return;

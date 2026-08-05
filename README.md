@@ -29,7 +29,7 @@ Three agents, one popup. Each carries the session name, working directory, and a
 - Session name on the popup, read from each agent's own session records
 - Click-to-return: the exact pane in WezTerm, the host app's window elsewhere
 - UTF-8 previews for punctuation, non-Latin scripts, and emoji
-- Distinct sound and color for completion versus approval versus failure
+- Bundled playful WAV sounds: level-up completion, prompt chime, and soft game-over failure
 - Popup on the originating session's monitor
 - Twenty-second timeout that pauses while hovered
 - No PowerShell modules or other runtime dependencies
@@ -72,11 +72,11 @@ No manual `config.toml` changes are required.
 
 ### Claude Code
 
-Claude Code has no plugin hook mechanism, so it is configured through `%USERPROFILE%\.claude\settings.json`. Merge the hook block from [Install for Claude Code](docs/claude-code.md) into that file. It registers four events:
+Claude Code has no plugin hook mechanism, so it is configured through `%USERPROFILE%\.claude\settings.json`. Merge the hook block from [Install for Claude Code](docs/claude-code.md) into that file. It registers these main-session events:
 
 - `Stop` for completed turns
 - `PermissionRequest` for approval prompts and `AskUserQuestion`
-- `Notification` for elicitation dialogs and background agents
+- `Notification` for elicitation dialogs
 - `StopFailure` for API errors such as rate limits
 
 ### OpenCode
@@ -88,7 +88,7 @@ Copy-Item -Recurse .\plugins\claude-codex-windows-notify `
   "$env:USERPROFILE\.config\opencode\plugins\claude-codex-windows-notify"
 ```
 
-The plugin emits one completion notification for root `session.idle`. Child/subagent sessions are ignored via `parentID` from `session.updated`. It ignores `session.error`. Repeated idle events for the same session are deduplicated over ten seconds.
+The plugin emits one completion notification for root `session.idle`. It rejects child/subagent sessions from `parentID`, including when an idle event arrives before session metadata. It ignores `session.error`. Repeated idle events for the same session are deduplicated over ten seconds.
 
 Add the plugin to `%USERPROFILE%\.config\opencode\opencode.json`:
 
@@ -100,7 +100,7 @@ Add the plugin to `%USERPROFILE%\.config\opencode\opencode.json`:
 }
 ```
 
-Restart OpenCode after install or update. Copy the full plugin directory so `scripts/notify.ps1` sits next to `notification.js`.
+Restart OpenCode after install or update. Copy the full plugin directory so `scripts/notify.ps1` and `sounds\` sit next to `notification.js`.
 
 ## Update
 

@@ -7,7 +7,7 @@ Claude Code has no plugin hook mechanism, so its hooks live in your user setting
 ## Requirements
 
 - The same Windows and terminal requirements listed in the project README
-- Claude Code 2.1.198 or newer for background-agent notification types
+- Claude Code 2.1.198 or newer for the supported lifecycle event types
 - A local clone of this repository at a stable absolute path
 
 ## Configure

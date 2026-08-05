@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet("TurnComplete", "ApprovalRequested", "AttentionRequested", "BackgroundComplete", "TurnFailed")]
+    [ValidateSet("TurnComplete", "ApprovalRequested", "AttentionRequested", "TurnFailed")]
     [string]$Event = "TurnComplete",
 
     [ValidateSet("Codex", "Claude", "OpenCode")]
@@ -319,6 +319,41 @@ function Get-HostProcessFamilyHint {
     return ""
 }
 
+function Resolve-NotificationSound {
+    param(
+        [ValidateSet("TurnComplete", "ApprovalRequested", "AttentionRequested", "TurnFailed")]
+        [string]$NotificationEvent
+    )
+
+    $soundFile = switch ($NotificationEvent) {
+        "TurnComplete" { "complete.wav" }
+        { $_ -in "ApprovalRequested", "AttentionRequested" } { "approval.wav" }
+        "TurnFailed" { "failure.wav" }
+    }
+    $localSoundPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot (Join-Path "..\sounds" $soundFile)))
+    if (Test-Path -LiteralPath $localSoundPath -PathType Leaf) {
+        return $localSoundPath
+    }
+
+    $systemSoundPaths = switch ($NotificationEvent) {
+        "TurnComplete" {
+            @("C:\Windows\Media\Windows Notify Messaging.wav", "C:\Windows\Media\Windows Notify Email.wav")
+        }
+        { $_ -in "ApprovalRequested", "AttentionRequested" } {
+            @("C:\Windows\Media\Windows Proximity Notification.wav", "C:\Windows\Media\Windows Message Nudge.wav")
+        }
+        "TurnFailed" {
+            @("C:\Windows\Media\Windows Background.wav", "C:\Windows\Media\Windows Foreground.wav")
+        }
+    }
+    foreach ($systemSoundPath in $systemSoundPaths) {
+        if (Test-Path -LiteralPath $systemSoundPath -PathType Leaf) {
+            return $systemSoundPath
+        }
+    }
+    return $systemSoundPaths[0]
+}
+
 function New-NotificationData {
     param(
         $HookData,
@@ -327,7 +362,7 @@ function New-NotificationData {
 
     $expectedHookEvent = switch ($NotificationEvent) {
         "ApprovalRequested" { "PermissionRequest" }
-        { $_ -in "AttentionRequested", "BackgroundComplete" } { "Notification" }
+        "AttentionRequested" { "Notification" }
         "TurnFailed" { "StopFailure" }
         default { "Stop" }
     }
@@ -375,28 +410,11 @@ function New-NotificationData {
                 $title = "$ProductName needs you"
                 $message = "Approval requested for $toolName."
             }
-            $soundPath = "C:\Windows\Media\Windows Proximity Notification.wav"
-            if (-not (Test-Path -LiteralPath $soundPath)) {
-                $soundPath = "C:\Windows\Media\Windows Message Nudge.wav"
-            }
         }
         "AttentionRequested" {
             $title = [string]$HookData.title
             if ([string]::IsNullOrWhiteSpace($title)) { $title = "$ProductName needs you" }
             $message = Get-RequiredString $HookData "message"
-            $soundPath = "C:\Windows\Media\Windows Proximity Notification.wav"
-            if (-not (Test-Path -LiteralPath $soundPath)) {
-                $soundPath = "C:\Windows\Media\Windows Message Nudge.wav"
-            }
-        }
-        "BackgroundComplete" {
-            $title = [string]$HookData.title
-            if ([string]::IsNullOrWhiteSpace($title)) { $title = "$ProductName background work finished" }
-            $message = Get-RequiredString $HookData "message"
-            $soundPath = "C:\Windows\Media\Windows Notify Email.wav"
-            if (-not (Test-Path -LiteralPath $soundPath)) {
-                $soundPath = "C:\Windows\Media\Windows Notify Calendar.wav"
-            }
         }
         "TurnFailed" {
             $title = "$ProductName failed"
@@ -405,10 +423,6 @@ function New-NotificationData {
                 $errorType = Get-RequiredString $HookData "error"
                 $message = "$ProductName stopped because of $errorType."
             }
-            $soundPath = "C:\Windows\Media\Windows Background.wav"
-            if (-not (Test-Path -LiteralPath $soundPath)) {
-                $soundPath = "C:\Windows\Media\Windows Foreground.wav"
-            }
         }
         default {
             $title = "$ProductName finished"
@@ -416,15 +430,12 @@ function New-NotificationData {
             if ([string]::IsNullOrWhiteSpace($message)) {
                 $message = "$ProductName finished without a final response."
             }
-            $soundPath = "C:\Windows\Media\Windows Notify Messaging.wav"
-            if (-not (Test-Path -LiteralPath $soundPath)) {
-                $soundPath = "C:\Windows\Media\Windows Notify Email.wav"
-            }
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($message)) {
         $message = $message.Trim()
     }
+    $soundPath = Resolve-NotificationSound $NotificationEvent
 
     return [ordered]@{
         event                = $NotificationEvent

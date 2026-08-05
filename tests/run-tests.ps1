@@ -3,7 +3,9 @@ param()
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $notifier = Join-Path $root "plugins\claude-codex-windows-notify\scripts\notify.ps1"
+$openCodeNotifier = Join-Path $root "plugins\claude-codex-windows-notify\notification.js"
 $hooksPath = Join-Path $root "plugins\claude-codex-windows-notify\hooks\hooks.json"
+$soundsDirectory = Join-Path $root "plugins\claude-codex-windows-notify\sounds"
 $fixtureDirectory = Join-Path $PSScriptRoot "fixtures"
 $temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) ("claude-codex-windows-notify-tests-" + [guid]::NewGuid())
 $originalTermProgram = $env:TERM_PROGRAM
@@ -63,7 +65,6 @@ function Assert-ProcessSucceeded {
 function Invoke-NotifierDryRun {
     param(
         [string]$Payload,
-        [ValidateSet("TurnComplete", "ApprovalRequested", "AttentionRequested", "BackgroundComplete", "TurnFailed")]
         [string]$Event,
         [ValidateSet("Codex", "Claude", "OpenCode")]
         [string]$ProductName = "Codex"
@@ -127,6 +128,7 @@ try {
     $stop = $stopResult.Stdout | ConvertFrom-Json
     Assert-Equal $stop.event "TurnComplete" "Stop event should map to completion."
     Assert-Equal $stop.message "All checks passed." "Supported last_assistant_message should drive the preview."
+    Assert-Equal $stop.sound_path ([IO.Path]::GetFullPath((Join-Path $soundsDirectory "complete.wav"))) "Completion notifications should use the local gamified complete sound."
     Assert-Equal $stop.terminal_integration "wezterm" "WezTerm sessions should enable exact-pane integration."
     Assert-Equal $stop.source_pane_id "42" "Originating WezTerm pane should be captured."
     Assert-Equal $stop.host_process_family_hint "vscode" "The VS Code host family hint should be captured."
@@ -136,6 +138,7 @@ try {
     Assert-ProcessSucceeded $permissionResult "PermissionRequest fixture should succeed."
     $permission = $permissionResult.Stdout | ConvertFrom-Json
     Assert-Equal $permission.message "Approval requested for exec_command." "Tool name should appear in approval notifications."
+    Assert-Equal $permission.sound_path ([IO.Path]::GetFullPath((Join-Path $soundsDirectory "approval.wav"))) "Approval notifications should use the local gamified approval sound."
 
     $subagentPermissionPayload = [ordered]@{
         cwd = "C:\work\demo"
@@ -187,7 +190,7 @@ try {
     Assert-Equal $claudeStop.product_name "Claude" "The payload should name the product so the detached worker can too."
     Assert-Equal $stop.product_name "Codex" "The payload should name the product for Codex sessions as well."
 
-    $agentNotificationPayload = [ordered]@{
+    $backgroundPayload = [ordered]@{
         cwd = "C:\work\demo"
         hook_event_name = "Notification"
         notification_type = "agent_completed"
@@ -195,10 +198,9 @@ try {
         session_id = "claude-main-session"
         title = "Background complete"
     } | ConvertTo-Json -Compress
-    $agentNotificationResult = Invoke-NotifierDryRun $agentNotificationPayload "BackgroundComplete" "Claude"
-    Assert-ProcessSucceeded $agentNotificationResult "Background agent Notification should be ignored."
-    $agentNotification = $agentNotificationResult.Stdout | ConvertFrom-Json
-    Assert-Equal $agentNotification.skipped $true "Background agent notifications must not raise a popup."
+    $backgroundResult = Invoke-NotifierDryRun $backgroundPayload "BackgroundComplete" "Claude"
+    Assert-True ($backgroundResult.ExitCode -ne 0) "BackgroundComplete must not be a supported notification category."
+    Assert-True ($backgroundResult.Stderr -match "ValidateSet") "BackgroundComplete rejection should identify the accepted event contract."
 
     $notificationPayload = [ordered]@{
         cwd = "C:\work\demo"
@@ -212,6 +214,7 @@ try {
     $attention = $attentionResult.Stdout | ConvertFrom-Json
     Assert-Equal $attention.title "Claude needs you" "Attention notifications should use the Claude title."
     Assert-Equal $attention.message "Claude is waiting for your answer." "Attention notifications should preserve Claude's message."
+    Assert-Equal $attention.sound_path ([IO.Path]::GetFullPath((Join-Path $soundsDirectory "approval.wav"))) "Attention notifications should use the local gamified approval sound."
 
     $failurePayload = [ordered]@{
         cwd = "C:\work\demo"
@@ -225,6 +228,22 @@ try {
     $failure = $failureResult.Stdout | ConvertFrom-Json
     Assert-Equal $failure.title "Claude failed" "Failure notifications should identify Claude."
     Assert-Equal $failure.message "API Error: Rate limit reached" "Failure notifications should preserve the rendered error."
+    Assert-Equal $failure.sound_path ([IO.Path]::GetFullPath((Join-Path $soundsDirectory "failure.wav"))) "Failure notifications should use the local gamified failure sound."
+
+    foreach ($soundName in @("complete.wav", "approval.wav", "failure.wav")) {
+        $soundPath = Join-Path $soundsDirectory $soundName
+        Assert-True (Test-Path -LiteralPath $soundPath -PathType Leaf) "$soundName must be included with the plugin."
+        $soundBytes = [IO.File]::ReadAllBytes($soundPath)
+        Assert-True ($soundBytes.Length -ge 44) "$soundName must contain a complete WAV header."
+        Assert-Equal ([Text.Encoding]::ASCII.GetString($soundBytes, 0, 4)) "RIFF" "$soundName must be a RIFF WAV file."
+        Assert-Equal ([Text.Encoding]::ASCII.GetString($soundBytes, 8, 4)) "WAVE" "$soundName must be a WAVE file."
+        Assert-Equal ([BitConverter]::ToInt16($soundBytes, 20)) 1 "$soundName must use PCM encoding."
+        Assert-Equal ([BitConverter]::ToInt16($soundBytes, 22)) 1 "$soundName must be mono."
+        Assert-Equal ([BitConverter]::ToInt32($soundBytes, 24)) 44100 "$soundName must use a 44.1 kHz sample rate."
+        Assert-Equal ([BitConverter]::ToInt16($soundBytes, 34)) 16 "$soundName must use 16-bit samples."
+        $soundPlayer = New-Object System.Media.SoundPlayer $soundPath
+        $soundPlayer.Load()
+    }
 
     $env:WEZTERM_EXECUTABLE_DIR = $null
     $env:WEZTERM_PANE = $null
@@ -504,6 +523,13 @@ try {
     Assert-Equal $hooks.hooks.PermissionRequest.Count 1 "One PermissionRequest hook should be declared."
     $hookText = Get-Content -Raw -LiteralPath $hooksPath
     Assert-True ($hookText -match '\$\{PLUGIN_ROOT\}') "Hook commands should resolve scripts through PLUGIN_ROOT."
+
+    $backgroundEventReferences = Select-String -LiteralPath $notifier -Pattern "BackgroundComplete"
+    Assert-Equal @($backgroundEventReferences).Count 0 "The notifier must not retain a background notification category."
+
+    $openCodeNotifierText = Get-Content -Raw -LiteralPath $openCodeNotifier
+    Assert-True ($openCodeNotifierText.Contains("if (info?.parentID || childSessions.has(sessionId)) return;")) "OpenCode must reject child sessions even when idle arrives before session metadata."
+    Assert-True (-not $openCodeNotifierText.Contains("0.5.2")) "OpenCode must not resolve a stale, hard-coded Codex cache version."
 
     $forbiddenInternals = Select-String -LiteralPath $notifier -Pattern "state_5\.sqlite|\.sqlite|transcript_path|internal_chat_message_metadata_passthrough|last-assistant-message"
     Assert-Equal @($forbiddenInternals).Count 0 "Notifier should not depend on Codex SQLite persistence."
