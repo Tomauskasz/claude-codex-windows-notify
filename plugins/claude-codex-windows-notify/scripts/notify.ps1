@@ -1106,6 +1106,12 @@ $screen = if ($originatingWindow -ne [IntPtr]::Zero) {
 } else {
     [Windows.Forms.Screen]::FromPoint([Windows.Forms.Cursor]::Position).WorkingArea
 }
+if ($screen.Width -lt 720) {
+    $primaryScreen = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    if ($primaryScreen.Width -gt $screen.Width) {
+        $screen = $primaryScreen
+    }
+}
 $cardWidth = [Math]::Min(720, ($screen.Width - 36))
 $form.ClientSize = New-Object Drawing.Size($cardWidth, 140)
 $form.Location = New-Object Drawing.Point(
@@ -1176,7 +1182,7 @@ $closeButton.AccessibleName = "Dismiss notification"
 $form.Controls.Add($closeButton)
 
 $messageLabel = New-Object Windows.Forms.Label
-$messageLabel.AutoSize = $false
+$messageLabel.AutoSize = $true
 $messageLabel.Location = New-Object Drawing.Point(14, 87)
 $messageLabel.Font = New-Object Drawing.Font("Segoe UI", 11.25)
 $messageLabel.ForeColor = [Drawing.Color]::FromArgb(205, 214, 244)
@@ -1184,16 +1190,10 @@ $messageLabel.AutoEllipsis = $true
 $messageLabel.TextAlign = [Drawing.ContentAlignment]::TopLeft
 $messageLabel.Text = $message
 $messageWidth = $cardWidth - 28
-$measurementBounds = New-Object Drawing.Size($messageWidth, 1600)
-$measurementFlags = [Windows.Forms.TextFormatFlags]::WordBreak -bor [Windows.Forms.TextFormatFlags]::NoPadding
-$measuredMessage = [Windows.Forms.TextRenderer]::MeasureText(
-    $message,
-    $messageLabel.Font,
-    $measurementBounds,
-    $measurementFlags
-)
+$messageLabel.MaximumSize = New-Object Drawing.Size($messageWidth, 1600)
+$messageHeight = $messageLabel.GetPreferredSize((New-Object Drawing.Size($messageWidth, 1600))).Height
 $maximumMessageHeight = [Math]::Max(120, [Math]::Min(480, ($screen.Height - 130)))
-$messageHeight = [Math]::Max(25, [Math]::Min($maximumMessageHeight, ($measuredMessage.Height + 4)))
+$messageHeight = [Math]::Max(25, [Math]::Min($maximumMessageHeight, $messageHeight + 12))
 $messageLabel.Size = New-Object Drawing.Size($messageWidth, $messageHeight)
 $form.Controls.Add($messageLabel)
 
@@ -1256,12 +1256,17 @@ $closeButton.Add_MouseEnter({ $closeButton.ForeColor = $accentColor })
 $closeButton.Add_MouseLeave({ $closeButton.ForeColor = [Drawing.Color]::FromArgb(127, 132, 156) })
 
 $timer = New-Object Windows.Forms.Timer
-$timer.Interval = 20000
+$timer.Interval = 10000
 $timer.Add_Tick({ $timer.Stop(); $form.Close() })
 $timer.Start()
 
-$player = New-Object System.Media.SoundPlayer $soundPath
-$player.Play()
+Add-Type -Namespace NotifyAudio -Name Api -MemberDefinition @"
+[System.Runtime.InteropServices.DllImport("winmm.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern bool PlaySound(string sound, System.IntPtr hmod, uint flags);
+"@
+
+$notifySoundFlags = 0x00020000 -bor 0x00000001
+[NotifyAudio.Api]::PlaySound($soundPath, [System.IntPtr]::Zero, $notifySoundFlags) | Out-Null
 $form.Show()
 [NotifyWindowFocus]::ShowWindowAsync($form.Handle, 4) | Out-Null
 $form.Add_FormClosed({ [Windows.Forms.Application]::ExitThread() })

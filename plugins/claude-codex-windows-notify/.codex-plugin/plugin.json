@@ -1,6 +1,6 @@
 {
   "name": "claude-codex-windows-notify",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Native Windows notifications for Codex, Claude Code, and OpenCode, with exact-pane return for WezTerm.",
   "author": {
     "name": "Tomas Bitvinskas",

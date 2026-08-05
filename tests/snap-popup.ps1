@@ -55,6 +55,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 public class PopupSnap {
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr h);
@@ -62,10 +64,11 @@ public class PopupSnap {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern bool GetClassName(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
-    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
     public delegate bool EnumProc(IntPtr h, IntPtr l);
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int X, Y; }
 }
 "@
 
@@ -74,11 +77,11 @@ Write-Host "Worker PID: $workerPid"
 
 Start-Sleep -Milliseconds $DelayMs
 
-$best = $null
-$bestArea = 0
-
 $script:bestHandle = [IntPtr]::Zero
-$script:bestRect = $null
+$script:bestClientOrigin = $null
+$script:bestClientSize = $null
+$script:bestWindowRect = $null
+$script:bestArea = 0
 
 $callback = {
     param($h, $l)
@@ -90,23 +93,38 @@ $callback = {
     $winPid = [uint32]0
     [PopupSnap]::GetWindowThreadProcessId($h, [ref]$winPid) | Out-Null
     if ($winPid -ne $script:workerPid) { return $true }
-    $rect = New-Object PopupSnap+RECT
-    [PopupSnap]::GetWindowRect($h, [ref]$rect) | Out-Null
-    $w = $rect.Right - $rect.Left
-    $hpx = $rect.Bottom - $rect.Top
-    $area = $w * $hpx
-    Write-Host ("Candidate hwnd=0x{0:X} pid={1} cls={2} rect={3},{4} {5}x{6}" -f $h.ToInt64(), $winPid, $className, $rect.Left, $rect.Top, $w, $hpx)
-    if ($w -ge 300 -and $hpx -ge 100 -and $area -gt $script:bestArea) {
+    $winRect = New-Object PopupSnap+RECT
+    [PopupSnap]::GetWindowRect($h, [ref]$winRect) | Out-Null
+    $clientRect = New-Object PopupSnap+RECT
+    [PopupSnap]::GetClientRect($h, [ref]$clientRect) | Out-Null
+    $origin = New-Object PopupSnap+POINT
+    [PopupSnap]::ClientToScreen($h, [ref]$origin) | Out-Null
+    $cw = $clientRect.Right - $clientRect.Left
+    $ch = $clientRect.Bottom - $clientRect.Top
+    $ww = $winRect.Right - $winRect.Left
+    $wh = $winRect.Bottom - $winRect.Top
+    $area = $ww * $wh
+    Write-Host ("Candidate hwnd=0x{0:X} pid={1} cls={2} win=({3},{4}) {5}x{6} client=({7},{8}) {9}x{10}" -f $h.ToInt64(), $winPid, $className, $winRect.Left, $winRect.Top, $ww, $wh, $origin.X, $origin.Y, $cw, $ch)
+    if ($ww -ge 300 -and $wh -ge 100 -and $area -gt $script:bestArea) {
         $script:bestArea = $area
         $script:bestHandle = $h
-        $script:bestRect = $rect
+        $script:bestClientOrigin = $origin
+        $script:bestClientSize = $clientRect
+        $script:bestWindowRect = $winRect
     }
     return $true
 }
 $script:workerPid = $workerPid
 $enumProc = [PopupSnap+EnumProc]$callback
 
-[PopupSnap]::EnumWindows($enumProc, [IntPtr]::Zero) | Out-Null
+# Poll until popup layout settles (form resized to fit measured message)
+for ($poll = 0; $poll -lt 40; $poll++) {
+    $script:bestHandle = [IntPtr]::Zero
+    $script:bestArea = 0
+    [PopupSnap]::EnumWindows($enumProc, [IntPtr]::Zero) | Out-Null
+    if ($script:bestHandle -ne [IntPtr]::Zero -and $script:bestArea -gt 40000) { break }
+    Start-Sleep -Milliseconds 150
+}
 
 if ($script:bestHandle -eq [IntPtr]::Zero) {
     Write-Error "Popup window not found"
@@ -115,18 +133,27 @@ if ($script:bestHandle -eq [IntPtr]::Zero) {
     exit 1
 }
 
-$rect = $script:bestRect
-$width = $rect.Right - $rect.Left
-$height = $rect.Bottom - $rect.Top
-Write-Host "Capturing $width x $height at $($rect.Left),$($rect.Top)"
+$winRect = $script:bestWindowRect
+$clientRect = $script:bestClientSize
+$origin = $script:bestClientOrigin
+$ww = $winRect.Right - $winRect.Left
+$wh = $winRect.Bottom - $winRect.Top
+$cw = $clientRect.Right - $clientRect.Left
+$ch = $clientRect.Bottom - $clientRect.Top
+$scaleX = if ($cw -gt 0) { [double]$ww / [double]$cw } else { 1.0 }
+$scaleY = if ($ch -gt 0) { [double]$wh / [double]$ch } else { 1.0 }
+$width = [int]([Math]::Round($cw * $scaleX))
+$height = [int]([Math]::Round($ch * $scaleY))
+$left = $winRect.Left
+$top = $winRect.Top
+Write-Host "Capturing $width x $height at $left,$top (scale=$scaleX,$scaleY)"
 $bmp = New-Object System.Drawing.Bitmap $width, $height
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $hdc = $g.GetHdc()
 $ok = [PopupSnap]::PrintWindow($script:bestHandle, $hdc, 2)
 $g.ReleaseHdc($hdc)
 if (-not $ok) {
-    Write-Host "PrintWindow failed, falling back to CopyFromScreen"
-    $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, (New-Object System.Drawing.Size $width, $height))
+    Write-Host "PrintWindow failed"
 }
 $directory = Split-Path $Output -Parent
 if (-not (Test-Path -LiteralPath $directory)) { New-Item -Path $directory -ItemType Directory -Force | Out-Null }
