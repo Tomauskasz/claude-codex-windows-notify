@@ -1275,12 +1275,19 @@ $timer.Interval = 10000
 $timer.Add_Tick({ $timer.Stop(); $form.Close() })
 $timer.Start()
 
-if (-not [string]::IsNullOrWhiteSpace($soundPath) -and (Test-Path -LiteralPath $soundPath)) {
-    try {
-        $script:soundPlayer = New-Object System.Media.SoundPlayer $soundPath
-        $script:soundPlayer.Play()
-    } catch {}
-}
+$form.Add_Shown({
+    if (-not [string]::IsNullOrWhiteSpace($soundPath) -and (Test-Path -LiteralPath $soundPath)) {
+        try {
+            $script:soundPlayer = New-Object System.Media.SoundPlayer $soundPath
+            $script:soundPlayer.Load()
+            $script:soundPlayer.Play()
+        } catch {
+            [System.Media.SystemSounds]::Asterisk.Play()
+        }
+    } else {
+        [System.Media.SystemSounds]::Asterisk.Play()
+    }
+})
 $form.Show()
 [NotifyWindowFocus]::ShowWindowAsync($form.Handle, 4) | Out-Null
 $form.Add_FormClosed({ [Windows.Forms.Application]::ExitThread() })
