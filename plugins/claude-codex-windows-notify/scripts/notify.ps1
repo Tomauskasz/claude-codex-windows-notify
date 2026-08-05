@@ -375,19 +375,28 @@ function New-NotificationData {
                 $title = "$ProductName needs you"
                 $message = "Approval requested for $toolName."
             }
-            $soundPath = "C:\Windows\Media\Windows Message Nudge.wav"
+            $soundPath = "C:\Windows\Media\Windows Proximity Notification.wav"
+            if (-not (Test-Path -LiteralPath $soundPath)) {
+                $soundPath = "C:\Windows\Media\Windows Message Nudge.wav"
+            }
         }
         "AttentionRequested" {
             $title = [string]$HookData.title
             if ([string]::IsNullOrWhiteSpace($title)) { $title = "$ProductName needs you" }
             $message = Get-RequiredString $HookData "message"
-            $soundPath = "C:\Windows\Media\Windows Message Nudge.wav"
+            $soundPath = "C:\Windows\Media\Windows Proximity Notification.wav"
+            if (-not (Test-Path -LiteralPath $soundPath)) {
+                $soundPath = "C:\Windows\Media\Windows Message Nudge.wav"
+            }
         }
         "BackgroundComplete" {
             $title = [string]$HookData.title
             if ([string]::IsNullOrWhiteSpace($title)) { $title = "$ProductName background work finished" }
             $message = Get-RequiredString $HookData "message"
-            $soundPath = "C:\Windows\Media\Windows Notify Calendar.wav"
+            $soundPath = "C:\Windows\Media\Windows Notify Email.wav"
+            if (-not (Test-Path -LiteralPath $soundPath)) {
+                $soundPath = "C:\Windows\Media\Windows Notify Calendar.wav"
+            }
         }
         "TurnFailed" {
             $title = "$ProductName failed"
@@ -396,7 +405,10 @@ function New-NotificationData {
                 $errorType = Get-RequiredString $HookData "error"
                 $message = "$ProductName stopped because of $errorType."
             }
-            $soundPath = "C:\Windows\Media\Windows Exclamation.wav"
+            $soundPath = "C:\Windows\Media\Windows Background.wav"
+            if (-not (Test-Path -LiteralPath $soundPath)) {
+                $soundPath = "C:\Windows\Media\Windows Foreground.wav"
+            }
         }
         default {
             $title = "$ProductName finished"
@@ -404,7 +416,10 @@ function New-NotificationData {
             if ([string]::IsNullOrWhiteSpace($message)) {
                 $message = "$ProductName finished without a final response."
             }
-            $soundPath = "C:\Windows\Media\Windows Notify Calendar.wav"
+            $soundPath = "C:\Windows\Media\Windows Notify Messaging.wav"
+            if (-not (Test-Path -LiteralPath $soundPath)) {
+                $soundPath = "C:\Windows\Media\Windows Notify Email.wav"
+            }
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($message)) {
@@ -1260,13 +1275,12 @@ $timer.Interval = 10000
 $timer.Add_Tick({ $timer.Stop(); $form.Close() })
 $timer.Start()
 
-Add-Type -Namespace NotifyAudio -Name Api -MemberDefinition @"
-[System.Runtime.InteropServices.DllImport("winmm.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-public static extern bool PlaySound(string sound, System.IntPtr hmod, uint flags);
-"@
-
-$notifySoundFlags = 0x00020000 -bor 0x00000001
-[NotifyAudio.Api]::PlaySound($soundPath, [System.IntPtr]::Zero, $notifySoundFlags) | Out-Null
+if (-not [string]::IsNullOrWhiteSpace($soundPath) -and (Test-Path -LiteralPath $soundPath)) {
+    try {
+        $script:soundPlayer = New-Object System.Media.SoundPlayer $soundPath
+        $script:soundPlayer.Play()
+    } catch {}
+}
 $form.Show()
 [NotifyWindowFocus]::ShowWindowAsync($form.Handle, 4) | Out-Null
 $form.Add_FormClosed({ [Windows.Forms.Application]::ExitThread() })
