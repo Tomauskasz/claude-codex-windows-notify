@@ -149,6 +149,17 @@ function Get-CodexSessionName {
     param([string]$SessionId)
 
     $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME ".codex" }
+    $stateFiles = @(Get-ChildItem -LiteralPath $codexHome -Filter "state_*.sqlite" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.BaseName -match '^state_(\d+)$' } |
+        Sort-Object { [int]$_.BaseName.Substring(6) } -Descending)
+    $stateNames = $null
+    if ($stateFiles.Count -gt 0) {
+        $stateNames = [NotifyCodexState]::ReadThreadNames($stateFiles[0].FullName, $SessionId)
+        if ($stateNames -and -not [string]::IsNullOrWhiteSpace($stateNames.Name)) {
+            return $stateNames.Name.Trim()
+        }
+    }
+
     $indexPath = Join-Path $codexHome "session_index.jsonl"
     if (Test-Path -LiteralPath $indexPath) {
         $name = ""
@@ -162,6 +173,14 @@ function Get-CodexSessionName {
         if ($name) { return $name }
     }
 
+    if ($stateNames -and -not [string]::IsNullOrWhiteSpace($stateNames.Title)) {
+        foreach ($line in @($stateNames.Title -split "\r?\n")) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                return $line.Trim()
+            }
+        }
+    }
+
     $sessionsDirectory = Join-Path $codexHome "sessions"
     if (-not (Test-Path -LiteralPath $sessionsDirectory)) { return "" }
     foreach ($file in @(Get-ChildItem -LiteralPath $sessionsDirectory -Filter "*-$SessionId.jsonl" -File -Recurse -ErrorAction SilentlyContinue)) {
@@ -173,7 +192,9 @@ function Get-CodexSessionName {
             $marker = "<user_message>"
             $markerIndex = $message.IndexOf($marker, [StringComparison]::Ordinal)
             if ($markerIndex -ge 0) { $message = $message.Substring($markerIndex + $marker.Length).Trim() }
-            if (-not [string]::IsNullOrWhiteSpace($message)) { return $message }
+            foreach ($messageLine in @($message -split "\r?\n")) {
+                if (-not [string]::IsNullOrWhiteSpace($messageLine)) { return $messageLine.Trim() }
+            }
         }
     }
     return ""
@@ -182,15 +203,10 @@ function Get-CodexSessionName {
 function Resolve-SessionName {
     param([string]$SessionId)
 
-    $name = ""
-    try {
-        $name = switch ($ProductName) {
-            "Claude" { Get-ClaudeSessionName $SessionId }
-            "Codex" { Get-CodexSessionName $SessionId }
-            default { "" }
-        }
-    } catch {
-        $name = ""
+    $name = switch ($ProductName) {
+        "Claude" { Get-ClaudeSessionName $SessionId }
+        "Codex" { Get-CodexSessionName $SessionId }
+        default { "" }
     }
 
     if ([string]::IsNullOrWhiteSpace($name)) { return $SessionId }
@@ -386,7 +402,7 @@ function New-NotificationData {
         }
     }
     $sessionName = [string]$HookData.session_name
-    if ([string]::IsNullOrWhiteSpace($sessionName)) {
+    if ($ProductName -ne "OpenCode" -or [string]::IsNullOrWhiteSpace($sessionName)) {
         $sessionName = Resolve-SessionName $sessionId
     }
     $sourcePaneId = [string]$env:WEZTERM_PANE
@@ -482,6 +498,161 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
+
+public sealed class NotifyCodexSessionNames
+{
+    public string Name { get; private set; }
+    public string Title { get; private set; }
+
+    public NotifyCodexSessionNames(string name, string title)
+    {
+        Name = name ?? "";
+        Title = title ?? "";
+    }
+}
+
+public static class NotifyCodexState
+{
+    private const int SQLITE_OK = 0;
+    private const int SQLITE_ROW = 100;
+    private const int SQLITE_DONE = 101;
+    private const int SQLITE_OPEN_READONLY = 0x00000001;
+    private static readonly IntPtr SQLITE_TRANSIENT = new IntPtr(-1);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_open_v2(IntPtr filename, out IntPtr database, int flags, IntPtr vfs);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_busy_timeout(IntPtr database, int milliseconds);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_prepare_v2(IntPtr database, IntPtr sql, int byteCount, out IntPtr statement, out IntPtr tail);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_bind_text(IntPtr statement, int index, IntPtr value, int byteCount, IntPtr destructor);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_step(IntPtr statement);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr sqlite3_column_text(IntPtr statement, int column);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_column_bytes(IntPtr statement, int column);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr sqlite3_errmsg(IntPtr database);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_finalize(IntPtr statement);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_close(IntPtr database);
+
+    private static IntPtr Utf8(string value)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(value + "\0");
+        IntPtr pointer = Marshal.AllocHGlobal(bytes.Length);
+        Marshal.Copy(bytes, 0, pointer, bytes.Length);
+        return pointer;
+    }
+
+    private static string Utf8String(IntPtr pointer, int byteCount)
+    {
+        if (pointer == IntPtr.Zero || byteCount <= 0)
+        {
+            return "";
+        }
+        byte[] bytes = new byte[byteCount];
+        Marshal.Copy(pointer, bytes, 0, byteCount);
+        return Encoding.UTF8.GetString(bytes);
+    }
+
+    private static string Utf8String(IntPtr pointer)
+    {
+        if (pointer == IntPtr.Zero)
+        {
+            return "";
+        }
+        int byteCount = 0;
+        while (Marshal.ReadByte(pointer, byteCount) != 0)
+        {
+            byteCount++;
+        }
+        return Utf8String(pointer, byteCount);
+    }
+
+    private static InvalidOperationException Failure(IntPtr database, string operation, int result)
+    {
+        string detail = database == IntPtr.Zero ? "database unavailable" : Utf8String(sqlite3_errmsg(database));
+        return new InvalidOperationException("Codex session-name lookup could not " + operation +
+            " (SQLite result " + result + "): " + detail);
+    }
+
+    public static NotifyCodexSessionNames ReadThreadNames(string path, string sessionId)
+    {
+        IntPtr pathPointer = Utf8(path);
+        IntPtr database = IntPtr.Zero;
+        try
+        {
+            int result = sqlite3_open_v2(pathPointer, out database, SQLITE_OPEN_READONLY, IntPtr.Zero);
+            if (result != SQLITE_OK)
+            {
+                throw Failure(database, "open the state database", result);
+            }
+            sqlite3_busy_timeout(database, 1000);
+
+            IntPtr sqlPointer = Utf8("SELECT name, title FROM threads WHERE id = ?1 LIMIT 1");
+            IntPtr statement = IntPtr.Zero;
+            try
+            {
+                IntPtr tail;
+                result = sqlite3_prepare_v2(database, sqlPointer, -1, out statement, out tail);
+                if (result != SQLITE_OK)
+                {
+                    throw Failure(database, "prepare the session query", result);
+                }
+
+                IntPtr sessionPointer = Utf8(sessionId);
+                try
+                {
+                    result = sqlite3_bind_text(statement, 1, sessionPointer, -1, SQLITE_TRANSIENT);
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(sessionPointer);
+                }
+                if (result != SQLITE_OK)
+                {
+                    throw Failure(database, "bind the session ID", result);
+                }
+
+                result = sqlite3_step(statement);
+                if (result == SQLITE_DONE)
+                {
+                    return null;
+                }
+                if (result != SQLITE_ROW)
+                {
+                    throw Failure(database, "read the session record", result);
+                }
+                string name = Utf8String(sqlite3_column_text(statement, 0), sqlite3_column_bytes(statement, 0));
+                string title = Utf8String(sqlite3_column_text(statement, 1), sqlite3_column_bytes(statement, 1));
+                return new NotifyCodexSessionNames(name, title);
+            }
+            finally
+            {
+                if (statement != IntPtr.Zero) sqlite3_finalize(statement);
+                Marshal.FreeHGlobal(sqlPointer);
+            }
+        }
+        finally
+        {
+            if (database != IntPtr.Zero) sqlite3_close(database);
+            Marshal.FreeHGlobal(pathPointer);
+        }
+    }
+}
 
 public static class NotifyDetachedProcess
 {
@@ -709,8 +880,10 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -ReferencedAssemblies "System.Windows.Forms.dll" -IgnoreWarnings -WarningAction SilentlyContinue -TypeDefinition @'
 using System;
 using System.Collections.Generic;
+using System.Media;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 
 public sealed class NotifyPopupForm : Form
@@ -726,6 +899,31 @@ public sealed class NotifyPopupForm : Form
             parameters.ClassStyle |= CS_DROPSHADOW;
             return parameters;
         }
+    }
+}
+
+public static class NotifySound
+{
+    public static void Play(string path)
+    {
+        Thread soundThread = new Thread(delegate()
+        {
+            try
+            {
+                using (SoundPlayer player = new SoundPlayer(path))
+                {
+                    player.Load();
+                    player.PlaySync();
+                }
+            }
+            catch
+            {
+                SystemSounds.Asterisk.Play();
+            }
+        });
+        soundThread.IsBackground = true;
+        soundThread.Name = "Notification sound";
+        soundThread.Start();
     }
 }
 
@@ -1288,13 +1486,7 @@ $timer.Start()
 
 $form.Add_Shown({
     if (-not [string]::IsNullOrWhiteSpace($soundPath) -and (Test-Path -LiteralPath $soundPath)) {
-        try {
-            $script:soundPlayer = New-Object System.Media.SoundPlayer $soundPath
-            $script:soundPlayer.Load()
-            $script:soundPlayer.Play()
-        } catch {
-            [System.Media.SystemSounds]::Asterisk.Play()
-        }
+        [NotifySound]::Play($soundPath)
     } else {
         [System.Media.SystemSounds]::Asterisk.Play()
     }

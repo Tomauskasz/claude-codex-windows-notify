@@ -70,6 +70,8 @@ Start a new Codex session, review the two bundled hooks, and trust them when pro
 
 No manual `config.toml` changes are required.
 
+Codex notifications use the explicit `/rename` value when one exists. Otherwise they use the current title shown by `/sessions` and `/resume`. The notifier reads Codex's current state database directly in read-only mode and retains the legacy session index and rollout transcript only as compatibility sources.
+
 ### Claude Code
 
 Claude Code has no plugin hook mechanism, so it is configured through `%USERPROFILE%\.claude\settings.json`. Merge the hook block from [Install for Claude Code](docs/claude-code.md) into that file. It registers these main-session events:

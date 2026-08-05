@@ -101,6 +101,85 @@ function Invoke-NotifierDryRun {
     }
 }
 
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class NotifyTestSqlite
+{
+    private const int SQLITE_OK = 0;
+    private const int SQLITE_OPEN_READWRITE = 0x00000002;
+    private const int SQLITE_OPEN_CREATE = 0x00000004;
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_open_v2(IntPtr filename, out IntPtr database, int flags, IntPtr vfs);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_exec(IntPtr database, IntPtr sql, IntPtr callback, IntPtr argument, out IntPtr error);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_close(IntPtr database);
+
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void sqlite3_free(IntPtr memory);
+
+    private static IntPtr Utf8(string value)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(value + "\0");
+        IntPtr pointer = Marshal.AllocHGlobal(bytes.Length);
+        Marshal.Copy(bytes, 0, pointer, bytes.Length);
+        return pointer;
+    }
+
+    private static string Quote(string value)
+    {
+        return "'" + value.Replace("'", "''") + "'";
+    }
+
+    public static void Create(string path)
+    {
+        IntPtr pathPointer = Utf8(path);
+        IntPtr database = IntPtr.Zero;
+        try
+        {
+            int result = sqlite3_open_v2(pathPointer, out database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, IntPtr.Zero);
+            if (result != SQLITE_OK)
+            {
+                throw new InvalidOperationException("Could not create the SQLite test fixture (result " + result + ").");
+            }
+
+            string sql =
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT NOT NULL, name TEXT);" +
+                "INSERT INTO threads VALUES (" + Quote("codex-named-session") + ", " + Quote("Database automatic title") + ", NULL);" +
+                "INSERT INTO threads VALUES (" + Quote("codex-db-named-session") + ", " + Quote("Old automatic title") + ", " + Quote("Database renamed session") + ");" +
+                "INSERT INTO threads VALUES (" + Quote("codex-db-titled-session") + ", " + Quote("Automatically generated session title\nPrompt preview") + ", NULL);";
+            IntPtr sqlPointer = Utf8(sql);
+            IntPtr error = IntPtr.Zero;
+            try
+            {
+                result = sqlite3_exec(database, sqlPointer, IntPtr.Zero, IntPtr.Zero, out error);
+                if (result != SQLITE_OK)
+                {
+                    string message = error == IntPtr.Zero ? "unknown error" : Marshal.PtrToStringAnsi(error);
+                    throw new InvalidOperationException("Could not populate the SQLite test fixture: " + message);
+                }
+            }
+            finally
+            {
+                if (error != IntPtr.Zero) sqlite3_free(error);
+                Marshal.FreeHGlobal(sqlPointer);
+            }
+        }
+        finally
+        {
+            if (database != IntPtr.Zero) sqlite3_close(database);
+            Marshal.FreeHGlobal(pathPointer);
+        }
+    }
+}
+'@
+
 try {
     New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
     New-Item -ItemType File -Path (Join-Path $temporaryDirectory "wezterm.exe") | Out-Null
@@ -119,6 +198,7 @@ try {
     New-Item -ItemType Directory -Path $claudeProjectDirectory -Force | Out-Null
     $env:CODEX_HOME = $codexHome
     $env:CLAUDE_CONFIG_DIR = Join-Path $temporaryDirectory "claude-home"
+    [NotifyTestSqlite]::Create((Join-Path $codexHome "state_5.sqlite"))
 
     $null = [scriptblock]::Create((Get-Content -Raw -LiteralPath $notifier))
 
@@ -301,11 +381,24 @@ try {
         hook_event_name = "Stop"
         last_assistant_message = "Done."
         session_id = "codex-named-session"
+        session_name = "codex-named-session"
     } | ConvertTo-Json -Compress
     $codexNamedResult = Invoke-NotifierDryRun $codexNamedPayload "TurnComplete"
     Assert-ProcessSucceeded $codexNamedResult "Named Codex session should succeed."
     $codexNamed = $codexNamedResult.Stdout | ConvertFrom-Json
     Assert-Equal $codexNamed.session_name "Notifs" "Codex notifications should show the latest session name, not the session ID."
+
+    $codexDatabaseNamedPayload = $codexNamedPayload -replace "codex-named-session", "codex-db-named-session"
+    $codexDatabaseNamedResult = Invoke-NotifierDryRun $codexDatabaseNamedPayload "TurnComplete"
+    Assert-ProcessSucceeded $codexDatabaseNamedResult "Database-named Codex session should succeed."
+    $codexDatabaseNamed = $codexDatabaseNamedResult.Stdout | ConvertFrom-Json
+    Assert-Equal $codexDatabaseNamed.session_name "Database renamed session" "Codex notifications should use the current database rename."
+
+    $codexDatabaseTitlePayload = $codexNamedPayload -replace "codex-named-session", "codex-db-titled-session"
+    $codexDatabaseTitleResult = Invoke-NotifierDryRun $codexDatabaseTitlePayload "TurnComplete"
+    Assert-ProcessSucceeded $codexDatabaseTitleResult "Automatically titled Codex session should succeed."
+    $codexDatabaseTitle = $codexDatabaseTitleResult.Stdout | ConvertFrom-Json
+    Assert-Equal $codexDatabaseTitle.session_name "Automatically generated session title" "Unnamed Codex sessions should use the current resume-picker title."
 
     $codexRolloutSessionId = "codex-rollout-session"
     @(
@@ -531,14 +624,17 @@ try {
     Assert-True ($openCodeNotifierText.Contains("if (info?.parentID || childSessions.has(sessionId)) return;")) "OpenCode must reject child sessions even when idle arrives before session metadata."
     Assert-True (-not $openCodeNotifierText.Contains("0.5.2")) "OpenCode must not resolve a stale, hard-coded Codex cache version."
 
-    $forbiddenInternals = Select-String -LiteralPath $notifier -Pattern "state_5\.sqlite|\.sqlite|transcript_path|internal_chat_message_metadata_passthrough|last-assistant-message"
-    Assert-Equal @($forbiddenInternals).Count 0 "Notifier should not depend on Codex SQLite persistence."
+    $forbiddenInternals = Select-String -LiteralPath $notifier -Pattern "transcript_path|internal_chat_message_metadata_passthrough|last-assistant-message"
+    Assert-Equal @($forbiddenInternals).Count 0 "Notifier should not depend on unsupported Codex internals."
+
+    $notifierText = Get-Content -Raw -LiteralPath $notifier
+    Assert-True ($notifierText.Contains('player.PlaySync();')) "The audio thread must play the complete short sound before it exits."
+    Assert-True ($notifierText.Contains('[NotifySound]::Play($soundPath)')) "The popup shown handler must start the dedicated audio thread."
 
     # Activation must never change the geometry of a window that is already on screen.
     # SwitchToThisWindow is undocumented and raises and restores unconditionally, so it stays banned
     # outright. A restore is allowed only for a minimized window, which has no on-screen geometry to
     # preserve, and only from the single helper that guards on IsIconic.
-    $notifierText = Get-Content -Raw -LiteralPath $notifier
     Assert-Equal ([regex]::Matches($notifierText, "SwitchToThisWindow").Count) 0 "Activation must not use SwitchToThisWindow, which raises and restores unconditionally."
 
     $restoreCalls = [regex]::Matches($notifierText, "ShowWindowAsync\(\s*window\s*,\s*(9|SW_RESTORE)\s*\)")
