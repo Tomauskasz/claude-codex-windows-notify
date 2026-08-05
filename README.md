@@ -72,7 +72,7 @@ Copy-Item -Recurse .\plugins\claude-codex-windows-notify `
   "$env:USERPROFILE\.config\opencode\plugins\claude-codex-windows-notify"
 ```
 
-The plugin emits one completion notification for `session.idle`. It ignores `session.error`: OpenCode emits this event for non-fatal internal errors. It also deduplicates repeated idle events for the same session over ten seconds.
+The plugin emits one completion notification for root `session.idle`. Child/subagent sessions are ignored via `parentID` from `session.updated`. It ignores `session.error`. Repeated idle events for the same session are deduplicated over ten seconds.
 
 Add the plugin to `%USERPROFILE%\.config\opencode\opencode.json`:
 
@@ -84,7 +84,7 @@ Add the plugin to `%USERPROFILE%\.config\opencode\opencode.json`:
 }
 ```
 
-Restart OpenCode. The plugin registers `session.idle` for completed turns.
+Restart OpenCode after install or update. Copy the full plugin directory so `scripts/notify.ps1` sits next to `notification.js`.
 
 ## Update
 
@@ -121,11 +121,11 @@ The worker renders a WinForms popup. In WezTerm, clicking it uses the JSON CLI t
 
 Outside WezTerm the hook records the process ancestry from itself towards the terminal host, and clicking the popup focuses the window of the app that hosts the session. This covers terminals embedded in another app: an integrated terminal in VS Code or Cursor hangs off a windowless pty-host process, so the first ancestor that owns a switchable window is the editor itself. A detached Claude background session can outlive that ancestry, so the hook also records the inherited VS Code-family marker and uses it only when no ancestor owns a window. The walk validates each hop against the parent's creation time, because Windows recycles process IDs, and stops before session managers and the shell so a stale ID cannot focus a stranger's window. When one host owns several windows, the deepest folder names of the session's working directory are matched against the window titles; a match that is not unique fails closed rather than guessing. Focus uses the same activation path as WezTerm, so the same geometry rule applies here too.
 
-The popup labels the notification with the session name instead of the session ID. For Codex it reads
-`$env:CODEX_HOME\session_index.jsonl` (default `~\.codex`); for Claude Code it reads the session records in
-`$env:CLAUDE_CONFIG_DIR\sessions` (default `~\.claude`); for OpenCode it falls back to the workspace folder name, as its API does not currently expose the LLM-generated session title. All lookups are read-only and best effort: a session with no name, or an unreadable record, falls back to the session ID.
-
-The implementation deliberately does not read either agent's internal SQLite database or transcript format.
+The popup uses same label as each agent's session picker. Codex reads the latest `thread_name` from
+`$env:CODEX_HOME\session_index.jsonl` (default `~\.codex`) or first persisted user message from its session rollout.
+Claude Code reads its live session name, then the latest explicit transcript name or AI-generated transcript title under
+`$env:CLAUDE_CONFIG_DIR` (default `~\.claude`). OpenCode uses its `session.updated` title event. Missing or unreadable
+metadata falls back to the session ID. The implementation does not read either agent's SQLite database.
 
 ## Privacy
 

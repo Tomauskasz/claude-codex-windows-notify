@@ -1,6 +1,4 @@
 {
-  "agent_id": "agent-test",
-  "agent_type": "default",
   "cwd": "C:\\work\\demo",
   "hook_event_name": "PermissionRequest",
   "model": "gpt-test",

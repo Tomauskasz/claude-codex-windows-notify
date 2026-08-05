@@ -65,7 +65,7 @@ function Invoke-NotifierDryRun {
         [string]$Payload,
         [ValidateSet("TurnComplete", "ApprovalRequested", "AttentionRequested", "BackgroundComplete", "TurnFailed")]
         [string]$Event,
-        [ValidateSet("Codex", "Claude")]
+        [ValidateSet("Codex", "Claude", "OpenCode")]
         [string]$ProductName = "Codex"
     )
 
@@ -110,9 +110,12 @@ try {
     $env:VSCODE_INJECTION = "1"
 
     $codexHome = Join-Path $temporaryDirectory "codex-home"
+    $codexRolloutDirectory = Join-Path $codexHome "sessions\2026\08\05"
     $claudeSessionDirectory = Join-Path $temporaryDirectory "claude-home\sessions"
-    New-Item -ItemType Directory -Path $codexHome | Out-Null
+    $claudeProjectDirectory = Join-Path $temporaryDirectory "claude-home\projects\C--work-demo"
+    New-Item -ItemType Directory -Path $codexRolloutDirectory -Force | Out-Null
     New-Item -ItemType Directory -Path $claudeSessionDirectory -Force | Out-Null
+    New-Item -ItemType Directory -Path $claudeProjectDirectory -Force | Out-Null
     $env:CODEX_HOME = $codexHome
     $env:CLAUDE_CONFIG_DIR = Join-Path $temporaryDirectory "claude-home"
 
@@ -133,6 +136,20 @@ try {
     Assert-ProcessSucceeded $permissionResult "PermissionRequest fixture should succeed."
     $permission = $permissionResult.Stdout | ConvertFrom-Json
     Assert-Equal $permission.message "Approval requested for exec_command." "Tool name should appear in approval notifications."
+
+    $subagentPermissionPayload = [ordered]@{
+        cwd = "C:\work\demo"
+        hook_event_name = "PermissionRequest"
+        session_id = "codex-main-session"
+        agent_id = "agent-sub-1"
+        agent_type = "explore"
+        tool_name = "exec_command"
+        tool_input = @{ command = "ls" }
+    } | ConvertTo-Json -Compress -Depth 5
+    $subagentPermissionResult = Invoke-NotifierDryRun $subagentPermissionPayload "ApprovalRequested"
+    Assert-ProcessSucceeded $subagentPermissionResult "Subagent PermissionRequest should be ignored."
+    $subagentPermission = $subagentPermissionResult.Stdout | ConvertFrom-Json
+    Assert-Equal $subagentPermission.skipped $true "Subagent permission requests must not raise a popup."
 
     $questionPayload = [ordered]@{
         cwd = "C:\work\demo"
@@ -170,11 +187,24 @@ try {
     Assert-Equal $claudeStop.product_name "Claude" "The payload should name the product so the detached worker can too."
     Assert-Equal $stop.product_name "Codex" "The payload should name the product for Codex sessions as well."
 
+    $agentNotificationPayload = [ordered]@{
+        cwd = "C:\work\demo"
+        hook_event_name = "Notification"
+        notification_type = "agent_completed"
+        message = "Background agent finished."
+        session_id = "claude-main-session"
+        title = "Background complete"
+    } | ConvertTo-Json -Compress
+    $agentNotificationResult = Invoke-NotifierDryRun $agentNotificationPayload "BackgroundComplete" "Claude"
+    Assert-ProcessSucceeded $agentNotificationResult "Background agent Notification should be ignored."
+    $agentNotification = $agentNotificationResult.Stdout | ConvertFrom-Json
+    Assert-Equal $agentNotification.skipped $true "Background agent notifications must not raise a popup."
+
     $notificationPayload = [ordered]@{
         cwd = "C:\work\demo"
         hook_event_name = "Notification"
         message = "Claude is waiting for your answer."
-        notification_type = "agent_needs_input"
+        notification_type = "elicitation_dialog"
         session_id = "claude-test-session"
     } | ConvertTo-Json -Compress
     $attentionResult = Invoke-NotifierDryRun $notificationPayload "AttentionRequested" "Claude"
@@ -258,11 +288,22 @@ try {
     $codexNamed = $codexNamedResult.Stdout | ConvertFrom-Json
     Assert-Equal $codexNamed.session_name "Notifs" "Codex notifications should show the latest session name, not the session ID."
 
+    $codexRolloutSessionId = "codex-rollout-session"
+    @(
+        (@{ type = "session_meta"; payload = @{ session_id = $codexRolloutSessionId } } | ConvertTo-Json -Compress),
+        (@{ type = "event_msg"; payload = @{ type = "user_message"; message = "<user_message>Resume picker label" } } | ConvertTo-Json -Compress)
+    ) | Set-Content -LiteralPath (Join-Path $codexRolloutDirectory "rollout-2026-08-05T12-00-00-$codexRolloutSessionId.jsonl") -Encoding UTF8
+    $codexRolloutPayload = $codexNamedPayload -replace "codex-named-session", $codexRolloutSessionId
+    $codexRolloutResult = Invoke-NotifierDryRun $codexRolloutPayload "TurnComplete"
+    Assert-ProcessSucceeded $codexRolloutResult "Codex rollout session should succeed."
+    $codexRollout = $codexRolloutResult.Stdout | ConvertFrom-Json
+    Assert-Equal $codexRollout.session_name "Resume picker label" "Unnamed Codex sessions should use the resume-picker label."
+
     $unnamedCodexPayload = $codexNamedPayload -replace "codex-named-session", "codex-unnamed-session"
     $unnamedCodexResult = Invoke-NotifierDryRun $unnamedCodexPayload "TurnComplete"
     Assert-ProcessSucceeded $unnamedCodexResult "Unnamed Codex session should succeed."
     $unnamedCodex = $unnamedCodexResult.Stdout | ConvertFrom-Json
-    Assert-Equal $unnamedCodex.session_name "codex-unnamed-session" "Codex sessions without a name should fall back to the session ID."
+    Assert-Equal $unnamedCodex.session_name "codex-unnamed-session" "Codex sessions without persisted picker metadata should fall back to the session ID."
 
     Set-Content -LiteralPath (Join-Path $claudeSessionDirectory "4242.json") -Encoding UTF8 -Value (
         @{ pid = 4242; sessionId = "claude-named-session"; name = "tomas-c6"; nameSource = "derived" } | ConvertTo-Json -Compress
@@ -273,6 +314,39 @@ try {
     Assert-ProcessSucceeded $claudeNamedResult "Named Claude session should succeed."
     $claudeNamed = $claudeNamedResult.Stdout | ConvertFrom-Json
     Assert-Equal $claudeNamed.session_name "tomas-c6" "Claude notifications should show the session name, not the session ID."
+
+    $claudeTitleSessionId = "claude-titled-session"
+    @(
+        (@{ type = "ai-title"; sessionId = $claudeTitleSessionId; aiTitle = "Old title" } | ConvertTo-Json -Compress),
+        (@{ type = "agent-name"; sessionId = $claudeTitleSessionId; agentName = "Explicit session name" } | ConvertTo-Json -Compress),
+        (@{ type = "ai-title"; sessionId = $claudeTitleSessionId; aiTitle = "Latest title" } | ConvertTo-Json -Compress)
+    ) | Set-Content -LiteralPath (Join-Path $claudeProjectDirectory "$claudeTitleSessionId.jsonl") -Encoding UTF8
+    $claudeTitlePayload = $codexNamedPayload -replace "codex-named-session", $claudeTitleSessionId
+    $claudeTitleResult = Invoke-NotifierDryRun $claudeTitlePayload "TurnComplete" "Claude"
+    Assert-ProcessSucceeded $claudeTitleResult "Claude transcript title should succeed."
+    $claudeTitle = $claudeTitleResult.Stdout | ConvertFrom-Json
+    Assert-Equal $claudeTitle.session_name "Explicit session name" "Claude notifications should prefer the latest explicit picker name over AI titles."
+
+    $claudeAiTitleSessionId = "claude-ai-titled-session"
+    (@{ type = "ai-title"; sessionId = $claudeAiTitleSessionId; aiTitle = "Claude picker title" } | ConvertTo-Json -Compress) |
+        Set-Content -LiteralPath (Join-Path $claudeProjectDirectory "$claudeAiTitleSessionId.jsonl") -Encoding UTF8
+    $claudeAiTitlePayload = $codexNamedPayload -replace "codex-named-session", $claudeAiTitleSessionId
+    $claudeAiTitleResult = Invoke-NotifierDryRun $claudeAiTitlePayload "TurnComplete" "Claude"
+    Assert-ProcessSucceeded $claudeAiTitleResult "Claude AI title should succeed."
+    $claudeAiTitle = $claudeAiTitleResult.Stdout | ConvertFrom-Json
+    Assert-Equal $claudeAiTitle.session_name "Claude picker title" "Claude notifications should use the AI picker title when no explicit name exists."
+
+    $openCodePayload = [ordered]@{
+        cwd = "C:\work\demo"
+        hook_event_name = "Stop"
+        last_assistant_message = "Done."
+        session_id = "opencode-session"
+        session_name = "OpenCode picker title"
+    } | ConvertTo-Json -Compress
+    $openCodeResult = Invoke-NotifierDryRun $openCodePayload "TurnComplete" "OpenCode"
+    Assert-ProcessSucceeded $openCodeResult "OpenCode session title should succeed."
+    $openCode = $openCodeResult.Stdout | ConvertFrom-Json
+    Assert-Equal $openCode.session_name "OpenCode picker title" "OpenCode notifications should use the persisted session title."
 
     $unnamedClaudePayload = $codexNamedPayload -replace "codex-named-session", "claude-unknown-session"
     $unnamedClaudeResult = Invoke-NotifierDryRun $unnamedClaudePayload "TurnComplete" "Claude"
@@ -431,10 +505,8 @@ try {
     $hookText = Get-Content -Raw -LiteralPath $hooksPath
     Assert-True ($hookText -match '\$\{PLUGIN_ROOT\}') "Hook commands should resolve scripts through PLUGIN_ROOT."
 
-    # session_index.jsonl is the only local record of a Codex session name, so the notifier
-    # reads it (read-only, best-effort) to label notifications. Everything else stays off limits.
     $forbiddenInternals = Select-String -LiteralPath $notifier -Pattern "state_5\.sqlite|\.sqlite|transcript_path|internal_chat_message_metadata_passthrough|last-assistant-message"
-    Assert-Equal @($forbiddenInternals).Count 0 "Notifier should not depend on internal Codex persistence formats."
+    Assert-Equal @($forbiddenInternals).Count 0 "Notifier should not depend on Codex SQLite persistence."
 
     # Activation must never change the geometry of a window that is already on screen.
     # SwitchToThisWindow is undocumented and raises and restores unconditionally, so it stays banned

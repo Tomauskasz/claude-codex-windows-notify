@@ -32,23 +32,12 @@ Open `%USERPROFILE%\.claude\settings.json` and merge the following `hooks` objec
     ],
     "Notification": [
       {
-        "matcher": "elicitation_dialog|agent_needs_input",
+        "matcher": "elicitation_dialog",
         "hooks": [
           {
             "type": "command",
             "command": "powershell.exe",
             "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\claude-codex-windows-notify\\plugins\\claude-codex-windows-notify\\scripts\\notify.ps1", "-Event", "AttentionRequested", "-ProductName", "Claude"],
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "agent_completed",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "powershell.exe",
-            "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\claude-codex-windows-notify\\plugins\\claude-codex-windows-notify\\scripts\\notify.ps1", "-Event", "BackgroundComplete", "-ProductName", "Claude"],
             "timeout": 5
           }
         ]
@@ -85,10 +74,12 @@ Open `%USERPROFILE%\.claude\settings.json` and merge the following `hooks` objec
 
 These hooks notify for:
 
-- permission requests and `AskUserQuestion` prompts
-- MCP elicitation dialogs and background agents waiting for input
-- main-turn completion and background-agent completion
+- main-session permission requests and `AskUserQuestion` prompts
+- MCP elicitation dialogs
+- main-turn completion
 - API failures such as rate limits or authentication errors
+
+Subagent completion and subagent permission prompts are ignored. Do not register `SubagentStop`.
 
 That is a wider event set than the Codex plugin registers, because Claude Code exposes more lifecycle events.
 

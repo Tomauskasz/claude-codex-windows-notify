@@ -108,19 +108,39 @@ function Get-ClaudeSessionName {
 
     $configDirectory = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }
     $sessionDirectory = Join-Path $configDirectory "sessions"
-    if (-not (Test-Path -LiteralPath $sessionDirectory)) {
-        return ""
+    if (Test-Path -LiteralPath $sessionDirectory) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $sessionDirectory -Filter "*.json" -File -ErrorAction SilentlyContinue)) {
+            try {
+                $record = Get-Content -Raw -LiteralPath $file.FullName -ErrorAction Stop | ConvertFrom-Json
+            } catch {
+                continue
+            }
+            if ([string]$record.sessionId -eq $SessionId -and -not [string]::IsNullOrWhiteSpace([string]$record.name)) {
+                return [string]$record.name
+            }
+        }
     }
 
-    foreach ($file in @(Get-ChildItem -LiteralPath $sessionDirectory -Filter "*.json" -File -ErrorAction SilentlyContinue)) {
-        try {
-            $record = Get-Content -Raw -LiteralPath $file.FullName -ErrorAction Stop | ConvertFrom-Json
-        } catch {
-            continue
+    $projectsDirectory = Join-Path $configDirectory "projects"
+    if (-not (Test-Path -LiteralPath $projectsDirectory)) {
+        return ""
+    }
+    foreach ($file in @(Get-ChildItem -LiteralPath $projectsDirectory -Filter "$SessionId.jsonl" -File -Recurse -ErrorAction SilentlyContinue)) {
+        $name = ""
+        $title = ""
+        foreach ($line in @(Get-Content -LiteralPath $file.FullName -ErrorAction SilentlyContinue)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $record = $line | ConvertFrom-Json } catch { continue }
+            if ([string]$record.sessionId -ne $SessionId) { continue }
+            if ($record.type -eq "agent-name" -and -not [string]::IsNullOrWhiteSpace([string]$record.agentName)) {
+                $name = [string]$record.agentName
+            }
+            if ($record.type -eq "ai-title" -and -not [string]::IsNullOrWhiteSpace([string]$record.aiTitle)) {
+                $title = [string]$record.aiTitle
+            }
         }
-        if ([string]$record.sessionId -eq $SessionId) {
-            return [string]$record.name
-        }
+        if ($name) { return $name }
+        if ($title) { return $title }
     }
     return ""
 }
@@ -130,25 +150,33 @@ function Get-CodexSessionName {
 
     $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME ".codex" }
     $indexPath = Join-Path $codexHome "session_index.jsonl"
-    if (-not (Test-Path -LiteralPath $indexPath)) {
-        return ""
+    if (Test-Path -LiteralPath $indexPath) {
+        $name = ""
+        foreach ($line in @(Get-Content -LiteralPath $indexPath -ErrorAction SilentlyContinue)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $record = $line | ConvertFrom-Json } catch { continue }
+            if ([string]$record.id -eq $SessionId -and -not [string]::IsNullOrWhiteSpace([string]$record.thread_name)) {
+                $name = [string]$record.thread_name
+            }
+        }
+        if ($name) { return $name }
     }
 
-    $name = ""
-    foreach ($line in @(Get-Content -LiteralPath $indexPath -ErrorAction SilentlyContinue)) {
-        if ([string]::IsNullOrWhiteSpace($line)) {
-            continue
-        }
-        try {
-            $record = $line | ConvertFrom-Json
-        } catch {
-            continue
-        }
-        if ([string]$record.id -eq $SessionId) {
-            $name = [string]$record.thread_name
+    $sessionsDirectory = Join-Path $codexHome "sessions"
+    if (-not (Test-Path -LiteralPath $sessionsDirectory)) { return "" }
+    foreach ($file in @(Get-ChildItem -LiteralPath $sessionsDirectory -Filter "*-$SessionId.jsonl" -File -Recurse -ErrorAction SilentlyContinue)) {
+        foreach ($line in @(Get-Content -LiteralPath $file.FullName -ErrorAction SilentlyContinue)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $record = $line | ConvertFrom-Json } catch { continue }
+            if ($record.type -ne "event_msg" -or $record.payload.type -ne "user_message") { continue }
+            $message = [string]$record.payload.message
+            $marker = "<user_message>"
+            $markerIndex = $message.IndexOf($marker, [StringComparison]::Ordinal)
+            if ($markerIndex -ge 0) { $message = $message.Substring($markerIndex + $marker.Length).Trim() }
+            if (-not [string]::IsNullOrWhiteSpace($message)) { return $message }
         }
     }
-    return $name
+    return ""
 }
 
 function Resolve-SessionName {
@@ -156,18 +184,16 @@ function Resolve-SessionName {
 
     $name = ""
     try {
-        $name = if ($ProductName -eq "Claude") {
-            Get-ClaudeSessionName $SessionId
-        } else {
-            Get-CodexSessionName $SessionId
+        $name = switch ($ProductName) {
+            "Claude" { Get-ClaudeSessionName $SessionId }
+            "Codex" { Get-CodexSessionName $SessionId }
+            default { "" }
         }
     } catch {
         $name = ""
     }
 
-    if ([string]::IsNullOrWhiteSpace($name)) {
-        return $SessionId
-    }
+    if ([string]::IsNullOrWhiteSpace($name)) { return $SessionId }
     return $name.Trim()
 }
 
@@ -312,6 +338,22 @@ function New-NotificationData {
 
     $sessionId = Get-RequiredString $HookData "session_id"
     $workingDirectory = Normalize-DisplayPath (Get-RequiredString $HookData "cwd")
+    if (-not [string]::IsNullOrWhiteSpace([string]$HookData.agent_id)) {
+        return $null
+    }
+    if ($actualHookEvent -eq "SubagentStop") {
+        return $null
+    }
+    if ($actualHookEvent -eq "Notification") {
+        $notificationType = [string]$HookData.notification_type
+        if ($notificationType -in @("agent_needs_input", "agent_completed")) {
+            return $null
+        }
+    }
+    $sessionName = [string]$HookData.session_name
+    if ([string]::IsNullOrWhiteSpace($sessionName)) {
+        $sessionName = Resolve-SessionName $sessionId
+    }
     $sourcePaneId = [string]$env:WEZTERM_PANE
     $terminalIntegration = if ([string]::IsNullOrWhiteSpace($sourcePaneId)) { "none" } else { "wezterm" }
     $weztermExecutable = if ($terminalIntegration -eq "wezterm") { Resolve-WezTermExecutable } else { "" }
@@ -372,10 +414,11 @@ function New-NotificationData {
     return [ordered]@{
         event                = $NotificationEvent
         product_name         = $ProductName
+        session_id           = $sessionId
         title                = $title
         message              = Limit-Text $message 1000
         sound_path           = $soundPath
-        session_name         = Limit-Text (Resolve-SessionName $sessionId) 120
+        session_name         = Limit-Text $sessionName 60
         working_directory    = Limit-Text $workingDirectory 500
         terminal_integration = $terminalIntegration
         source_pane_id       = $sourcePaneId
@@ -615,6 +658,12 @@ public static long GetCreationTime(int processId)
 '@
 
     $notificationData = New-NotificationData $hookData $Event
+    if ($null -eq $notificationData) {
+        if ($DryRun) {
+            [ordered]@{ skipped = $true; reason = "subagent" } | ConvertTo-Json -Compress
+        }
+        return
+    }
     if ($DryRun) {
         $notificationData | ConvertTo-Json -Depth 5
         return
@@ -810,6 +859,10 @@ $title = [string]$notificationData.title
 $message = [string]$notificationData.message
 $soundPath = [string]$notificationData.sound_path
 $sessionName = [string]$notificationData.session_name
+$sessionId = [string]$notificationData.session_id
+if ([string]::IsNullOrWhiteSpace($sessionName)) {
+    $sessionName = Resolve-SessionName $sessionId
+}
 $workingDirectory = [string]$notificationData.working_directory
 $terminalIntegration = [string]$notificationData.terminal_integration
 $sourcePaneId = [string]$notificationData.source_pane_id
