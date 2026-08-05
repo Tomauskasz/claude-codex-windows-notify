@@ -12,13 +12,9 @@ All three agents are first-class. One renderer serves all, and each is wired thr
 
 ![Codex completion popup](docs/screenshots/codex-complete.png)
 
-Claude Code and OpenCode completion popups use the same renderer.
-
 ### Approval
 
 ![Claude approval popup](docs/screenshots/claude-approval.png)
-
-Codex and OpenCode approval popups use the same renderer.
 
 ### Failure
 
