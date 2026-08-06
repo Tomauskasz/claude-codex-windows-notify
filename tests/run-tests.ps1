@@ -628,8 +628,9 @@ try {
     Assert-Equal @($forbiddenInternals).Count 0 "Notifier should not depend on unsupported Codex internals."
 
     $notifierText = Get-Content -Raw -LiteralPath $notifier
-    Assert-True ($notifierText.Contains('player.PlaySync();')) "The audio thread must play the complete short sound before it exits."
-    Assert-True ($notifierText.Contains('[NotifySound]::Play($soundPath)')) "The popup shown handler must start the dedicated audio thread."
+    Assert-True ($notifierText.Contains('New-Object Windows.Media.MediaPlayer')) "Notifications must use the WPF playback engine that reaches virtual Windows audio endpoints."
+    Assert-True ($notifierText.Contains('$script:mediaPlayer.Play()')) "The popup shown handler must start WPF media playback."
+    Assert-True (-not $notifierText.Contains('System.Media.SoundPlayer')) "Notifications must not use the silent SoundPlayer route."
 
     # Activation must never change the geometry of a window that is already on screen.
     # SwitchToThisWindow is undocumented and raises and restores unconditionally, so it stays banned

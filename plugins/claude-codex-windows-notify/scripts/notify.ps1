@@ -877,13 +877,12 @@ public static long GetCreationTime(int processId)
 
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName PresentationCore
 Add-Type -ReferencedAssemblies "System.Windows.Forms.dll" -IgnoreWarnings -WarningAction SilentlyContinue -TypeDefinition @'
 using System;
 using System.Collections.Generic;
-using System.Media;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading;
 using System.Windows.Forms;
 
 public sealed class NotifyPopupForm : Form
@@ -899,31 +898,6 @@ public sealed class NotifyPopupForm : Form
             parameters.ClassStyle |= CS_DROPSHADOW;
             return parameters;
         }
-    }
-}
-
-public static class NotifySound
-{
-    public static void Play(string path)
-    {
-        Thread soundThread = new Thread(delegate()
-        {
-            try
-            {
-                using (SoundPlayer player = new SoundPlayer(path))
-                {
-                    player.Load();
-                    player.PlaySync();
-                }
-            }
-            catch
-            {
-                SystemSounds.Asterisk.Play();
-            }
-        });
-        soundThread.IsBackground = true;
-        soundThread.Name = "Notification sound";
-        soundThread.Start();
     }
 }
 
@@ -1485,13 +1459,28 @@ $timer.Add_Tick({ $timer.Stop(); $form.Close() })
 $timer.Start()
 
 $form.Add_Shown({
-    if (-not [string]::IsNullOrWhiteSpace($soundPath) -and (Test-Path -LiteralPath $soundPath)) {
-        [NotifySound]::Play($soundPath)
-    } else {
-        [System.Media.SystemSounds]::Asterisk.Play()
+    try {
+        if ([string]::IsNullOrWhiteSpace($soundPath) -or -not (Test-Path -LiteralPath $soundPath -PathType Leaf)) {
+            throw "Notification sound file is missing: $soundPath"
+        }
+        $script:mediaPlayer = New-Object Windows.Media.MediaPlayer
+        $script:mediaPlayer.Volume = 1.0
+        $script:mediaPlayer.Add_MediaFailed({
+            param($sender, $eventArgs)
+            Write-WorkerFailure "Audio playback failed: $($eventArgs.ErrorException.Message)"
+        })
+        $script:mediaPlayer.Open([Uri]$soundPath)
+        $script:mediaPlayer.Play()
+    } catch {
+        Write-WorkerFailure "Audio playback failed: $($_.Exception.Message)"
     }
 })
 $form.Show()
 [NotifyWindowFocus]::ShowWindowAsync($form.Handle, 4) | Out-Null
-$form.Add_FormClosed({ [Windows.Forms.Application]::ExitThread() })
+$form.Add_FormClosed({
+    if ($script:mediaPlayer) {
+        $script:mediaPlayer.Close()
+    }
+    [Windows.Forms.Application]::ExitThread()
+})
 [Windows.Forms.Application]::Run()
